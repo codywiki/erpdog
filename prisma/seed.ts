@@ -1,0 +1,250 @@
+import { ExtraChargeKind, PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
+
+import { PERMISSION_CODES, ROLE_CODES } from "@erpdog/contracts";
+
+const prisma = new PrismaClient();
+
+const permissionNames: Record<string, string> = {
+  [PERMISSION_CODES.USER_MANAGE]: "管理用户和权限",
+  [PERMISSION_CODES.CUSTOMER_READ_ALL]: "查看全部客户",
+  [PERMISSION_CODES.CUSTOMER_READ_OWN]: "查看负责客户",
+  [PERMISSION_CODES.CUSTOMER_WRITE]: "维护客户资料",
+  [PERMISSION_CODES.CONTRACT_WRITE]: "维护合同和收费规则",
+  [PERMISSION_CODES.BILL_MANAGE]: "管理账单",
+  [PERMISSION_CODES.INVOICE_MANAGE]: "管理发票",
+  [PERMISSION_CODES.RECEIPT_MANAGE]: "管理收款",
+  [PERMISSION_CODES.COST_MANAGE]: "管理成本与应付",
+  [PERMISSION_CODES.PAYMENT_REQUEST_CREATE]: "发起付款申请",
+  [PERMISSION_CODES.PAYMENT_REQUEST_APPROVE]: "审批付款申请",
+  [PERMISSION_CODES.PAYMENT_PAY]: "登记付款",
+  [PERMISSION_CODES.PERIOD_CLOSE]: "月度结账",
+  [PERMISSION_CODES.PERIOD_REOPEN]: "解锁账期",
+  [PERMISSION_CODES.REPORT_VIEW]: "查看报表",
+  [PERMISSION_CODES.AUDIT_VIEW]: "查看审计日志"
+};
+
+const roleDefinitions = [
+  {
+    code: ROLE_CODES.ADMIN,
+    name: "管理员",
+    permissions: Object.values(PERMISSION_CODES)
+  },
+  {
+    code: ROLE_CODES.OWNER,
+    name: "老板",
+    permissions: [
+      PERMISSION_CODES.CUSTOMER_READ_ALL,
+      PERMISSION_CODES.PAYMENT_REQUEST_APPROVE,
+      PERMISSION_CODES.PERIOD_REOPEN,
+      PERMISSION_CODES.REPORT_VIEW,
+      PERMISSION_CODES.AUDIT_VIEW
+    ]
+  },
+  {
+    code: ROLE_CODES.FINANCE,
+    name: "财务",
+    permissions: [
+      PERMISSION_CODES.CUSTOMER_READ_ALL,
+      PERMISSION_CODES.BILL_MANAGE,
+      PERMISSION_CODES.INVOICE_MANAGE,
+      PERMISSION_CODES.RECEIPT_MANAGE,
+      PERMISSION_CODES.COST_MANAGE,
+      PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+      PERMISSION_CODES.PAYMENT_PAY,
+      PERMISSION_CODES.PERIOD_CLOSE,
+      PERMISSION_CODES.REPORT_VIEW
+    ]
+  },
+  {
+    code: ROLE_CODES.CUSTOMER_MANAGER,
+    name: "客户负责人",
+    permissions: [
+      PERMISSION_CODES.CUSTOMER_READ_OWN,
+      PERMISSION_CODES.CUSTOMER_WRITE,
+      PERMISSION_CODES.CONTRACT_WRITE,
+      PERMISSION_CODES.BILL_MANAGE,
+      PERMISSION_CODES.COST_MANAGE,
+      PERMISSION_CODES.PAYMENT_REQUEST_CREATE
+    ]
+  }
+];
+
+const extraChargeCategories = [
+  { code: "value-added", name: "增值服务", kind: ExtraChargeKind.VALUE_ADDED },
+  { code: "advance-payment", name: "代垫费用", kind: ExtraChargeKind.ADVANCE_PAYMENT }
+];
+
+const costCategories = [
+  { code: "labor", name: "人工成本" },
+  { code: "outsourcing", name: "外包服务" },
+  { code: "advance-payment", name: "代垫支出" },
+  { code: "software", name: "软件和工具" },
+  { code: "other", name: "其他成本" }
+];
+
+async function main() {
+  const org = await prisma.organization.upsert({
+    where: { code: "default" },
+    update: {},
+    create: {
+      code: "default",
+      name: "默认组织"
+    }
+  });
+
+  for (const code of Object.values(PERMISSION_CODES)) {
+    await prisma.permission.upsert({
+      where: { code },
+      update: {
+        name: permissionNames[code] ?? code
+      },
+      create: {
+        code,
+        name: permissionNames[code] ?? code
+      }
+    });
+  }
+
+  for (const roleDefinition of roleDefinitions) {
+    const role = await prisma.role.upsert({
+      where: {
+        orgId_code: {
+          orgId: org.id,
+          code: roleDefinition.code
+        }
+      },
+      update: {
+        name: roleDefinition.name,
+        isSystem: true
+      },
+      create: {
+        orgId: org.id,
+        code: roleDefinition.code,
+        name: roleDefinition.name,
+        isSystem: true
+      }
+    });
+
+    for (const permissionCode of roleDefinition.permissions) {
+      const permission = await prisma.permission.findUniqueOrThrow({
+        where: { code: permissionCode }
+      });
+
+      await prisma.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: role.id,
+            permissionId: permission.id
+          }
+        },
+        update: {},
+        create: {
+          roleId: role.id,
+          permissionId: permission.id
+        }
+      });
+    }
+  }
+
+  const adminEmail = (
+    process.env.ADMIN_EMAIL ?? "admin@erpdog.local"
+  ).toLowerCase();
+  const adminPassword = process.env.ADMIN_PASSWORD ?? "ChangeMe123!";
+  const adminName = process.env.ADMIN_NAME ?? "System Admin";
+  const passwordHash = await bcrypt.hash(adminPassword, 12);
+
+  const admin = await prisma.user.upsert({
+    where: { email: adminEmail },
+    update: {
+      name: adminName,
+      passwordHash,
+      isActive: true
+    },
+    create: {
+      orgId: org.id,
+      email: adminEmail,
+      name: adminName,
+      passwordHash,
+      isActive: true
+    }
+  });
+
+  const adminRole = await prisma.role.findUniqueOrThrow({
+    where: {
+      orgId_code: {
+        orgId: org.id,
+        code: ROLE_CODES.ADMIN
+      }
+    }
+  });
+
+  await prisma.userRole.upsert({
+    where: {
+      userId_roleId: {
+        userId: admin.id,
+        roleId: adminRole.id
+      }
+    },
+    update: {},
+    create: {
+      userId: admin.id,
+      roleId: adminRole.id
+    }
+  });
+
+  for (const category of extraChargeCategories) {
+    await prisma.extraChargeCategory.upsert({
+      where: {
+        orgId_code: {
+          orgId: org.id,
+          code: category.code
+        }
+      },
+      update: {
+        name: category.name,
+        kind: category.kind,
+        isActive: true
+      },
+      create: {
+        orgId: org.id,
+        code: category.code,
+        name: category.name,
+        kind: category.kind,
+        isActive: true
+      }
+    });
+  }
+
+  for (const category of costCategories) {
+    await prisma.costCategory.upsert({
+      where: {
+        orgId_code: {
+          orgId: org.id,
+          code: category.code
+        }
+      },
+      update: {
+        name: category.name,
+        isActive: true
+      },
+      create: {
+        orgId: org.id,
+        code: category.code,
+        name: category.name,
+        isActive: true
+      }
+    });
+  }
+
+  console.info(`Seeded erpdog admin user: ${adminEmail}`);
+}
+
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
