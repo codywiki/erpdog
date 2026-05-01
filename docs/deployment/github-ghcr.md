@@ -29,8 +29,9 @@ deploys it with GitHub Pages on every push to `main`. This preview is meant for
 product walkthroughs: the Web app includes an in-browser demo mode with seeded
 2026-04 data, so it works even when no public API or database has been deployed.
 
-For first-time setup, open repository Settings -> Pages and select GitHub Actions
-as the source. The expected preview URL for `codywiki/erpdog` is:
+The workflow tries to enable GitHub Pages automatically. If repository policy
+blocks automatic enablement, open repository Settings -> Pages and select GitHub
+Actions as the source. The expected preview URL for `codywiki/erpdog` is:
 
 ```text
 https://codywiki.github.io/erpdog/
