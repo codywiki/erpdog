@@ -25,13 +25,14 @@ publishing Docker images to GitHub Container Registry.
 ## GitHub Pages Preview
 
 `.github/workflows/pages-preview.yml` builds a static export of the Web app and
-deploys it with GitHub Pages on every push to `main`. This preview is meant for
-product walkthroughs: the Web app includes an in-browser demo mode with seeded
-2026-04 data, so it works even when no public API or database has been deployed.
+publishes it to the `gh-pages` branch on every push to `main`. This preview is
+meant for product walkthroughs: the Web app includes an in-browser demo mode
+with seeded 2026-04 data, so it works even when no public API or database has
+been deployed.
 
-The workflow tries to enable GitHub Pages automatically. If repository policy
-blocks automatic enablement, open repository Settings -> Pages and select GitHub
-Actions as the source. The expected preview URL for `codywiki/erpdog` is:
+If GitHub Pages is not enabled automatically, open repository Settings -> Pages
+and select "Deploy from a branch", then choose `gh-pages` and `/root`. The
+expected preview URL for `codywiki/erpdog` is:
 
 ```text
 https://codywiki.github.io/erpdog/

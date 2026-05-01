@@ -30,9 +30,9 @@ pnpm.cmd dev
 
 ## 线上预览
 
-推送到 `main` 后，`.github/workflows/pages-preview.yml` 会构建 Web 静态预览并部署到 GitHub Pages。预览页内置“进入演示”模式，可以在没有数据库和 API 的情况下查看 2026-04 的客户、合同、账单、收款、付款申请和利润数据。
+推送到 `main` 后，`.github/workflows/pages-preview.yml` 会构建 Web 静态预览并发布到 `gh-pages` 分支。预览页内置“进入演示”模式，可以在没有数据库和 API 的情况下查看 2026-04 的客户、合同、账单、收款、付款申请和利润数据。
 
-工作流会尝试自动启用 GitHub Pages。若仓库权限策略阻止自动启用，在 Settings → Pages 中将 Source 设为 **GitHub Actions**。部署完成后的地址通常是：
+若仓库没有自动启用 Pages，在 Settings → Pages 中将 Source 设为 **Deploy from a branch**，Branch 选择 `gh-pages` / `/root`。部署完成后的地址通常是：
 
 ```text
 https://codywiki.github.io/erpdog/

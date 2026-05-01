@@ -7,17 +7,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: pages-preview
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build static web preview
+  publish:
+    name: Build and publish static preview
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,11 +30,6 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
       - name: Install dependencies
         run: corepack pnpm install --frozen-lockfile
 
@@ -50,19 +43,20 @@ jobs:
           NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL || '' }}
         run: corepack pnpm --filter @erpdog/web build
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: apps/web/out
-
-  deploy:
-    name: Deploy static preview
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/erpdog-pages
+          mkdir -p /tmp/erpdog-pages
+          cp -R apps/web/out/. /tmp/erpdog-pages/
+          touch /tmp/erpdog-pages/.nojekyll
+          git -C /tmp/erpdog-pages init -q
+          git -C /tmp/erpdog-pages checkout -b gh-pages -q
+          git -C /tmp/erpdog-pages config user.name "github-actions[bot]"
+          git -C /tmp/erpdog-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C /tmp/erpdog-pages add -A
+          git -C /tmp/erpdog-pages commit -m "deploy pages preview from ${GITHUB_SHA}" -q
+          git -C /tmp/erpdog-pages remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C /tmp/erpdog-pages push --force origin gh-pages
