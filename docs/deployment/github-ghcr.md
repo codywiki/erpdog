@@ -22,6 +22,27 @@ publishing Docker images to GitHub Container Registry.
 - typecheck all workspaces
 - build all apps
 
+## GitHub Pages Preview
+
+`.github/workflows/pages-preview.yml` builds a static export of the Web app and
+deploys it with GitHub Pages on every push to `main`. This preview is meant for
+product walkthroughs: the Web app includes an in-browser demo mode with seeded
+2026-04 data, so it works even when no public API or database has been deployed.
+
+For first-time setup, open repository Settings -> Pages and select GitHub Actions
+as the source. The expected preview URL for `codywiki/erpdog` is:
+
+```text
+https://codywiki.github.io/erpdog/
+```
+
+If a real API is available later, set repository variable `NEXT_PUBLIC_API_URL`
+to the public API base URL before rebuilding the preview.
+
+The workflow sets `NEXT_BASE_PATH=/erpdog` so Next.js asset URLs match the
+repository Pages path. Change this value if the repository name or Pages path
+changes.
+
 ## Image Publishing
 
 `.github/workflows/publish-images.yml` publishes three images to GHCR:
@@ -41,6 +62,7 @@ secrets. Then run:
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm db:migrate
 docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm db:seed
+docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm db:seed:demo
 ```
 
 For a single-server start, put Caddy or Nginx in front of:

@@ -50,6 +50,22 @@ type PaymentRequest = {
   requestedAmount: string;
 };
 
+type ConsoleData = {
+  customers: Customer[];
+  contracts: Contract[];
+  bills: Bill[];
+  profits: ProfitRow[];
+  paymentRequests: PaymentRequest[];
+};
+
+const demoToken = "demo-token";
+
+const demoUser: ApiUser = {
+  email: "demo@erpdog.local",
+  name: "Demo Admin",
+  permissions: ["demo"]
+};
+
 const apiBase =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ??
   "http://localhost:4000/api/v1";
@@ -71,9 +87,91 @@ function money(value: string | number | undefined) {
   })}`;
 }
 
+function createDemoData(periodMonth: string): ConsoleData {
+  const customerA: Customer = {
+    id: "demo-customer-qingliu",
+    code: "CUST-001",
+    name: "上海清流派科技有限公司",
+    status: "ACTIVE"
+  };
+  const customerB: Customer = {
+    id: "demo-customer-yunhe",
+    code: "CUST-002",
+    name: "杭州云河供应链有限公司",
+    status: "ACTIVE"
+  };
+  const contractA: Contract = {
+    id: "demo-contract-qingliu",
+    code: "CTR-001",
+    name: "清流派月度运营服务合同",
+    status: "ACTIVE",
+    customer: customerA
+  };
+  const contractB: Contract = {
+    id: "demo-contract-yunhe",
+    code: "CTR-002",
+    name: "云河供应链财务外包服务",
+    status: "ACTIVE",
+    customer: customerB
+  };
+
+  return {
+    customers: [customerA, customerB],
+    contracts: [contractA, contractB],
+    bills: [
+      {
+        id: "demo-bill-qingliu",
+        billNo: `BILL-${periodMonth}-DEMO-CTR-001`,
+        periodMonth,
+        status: "CUSTOMER_CONFIRMED",
+        totalAmount: "18200.00",
+        invoiceAmount: "0.00",
+        receiptAmount: "10000.00",
+        customer: customerA
+      },
+      {
+        id: "demo-bill-yunhe",
+        billNo: `BILL-${periodMonth}-DEMO-CTR-002`,
+        periodMonth,
+        status: "GENERATED",
+        totalAmount: "12600.00",
+        invoiceAmount: "12600.00",
+        receiptAmount: "12600.00",
+        customer: customerB
+      }
+    ],
+    profits: [
+      {
+        customerName: customerA.name,
+        incomeAmount: "18200.00",
+        costAmount: "4600.00",
+        profitAmount: "13600.00",
+        grossMargin: "74.73%"
+      },
+      {
+        customerName: customerB.name,
+        incomeAmount: "12600.00",
+        costAmount: "3900.00",
+        profitAmount: "8700.00",
+        grossMargin: "69.05%"
+      }
+    ],
+    paymentRequests: [
+      {
+        id: "demo-payment-request-ops",
+        requestNo: `PR-${periodMonth}-DEMO-001`,
+        status: "SUBMITTED",
+        supplierName: "上海砺行服务有限公司",
+        requestedAmount: "4600.00"
+      }
+    ]
+  };
+}
+
 export default function Home() {
   const [token, setToken] = useState("");
   const [user, setUser] = useState<ApiUser | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
   const [message, setMessage] = useState("等待登录");
   const [active, setActive] = useState(navItems[0]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -118,7 +216,42 @@ export default function Home() {
     ];
   }, [bills, contracts.length, customers.length, paymentRequests.length, profits]);
 
+  function applyConsoleData(data: ConsoleData) {
+    setCustomers(data.customers);
+    setContracts(data.contracts);
+    setBills(data.bills);
+    setProfits(data.profits);
+    setPaymentRequests(data.paymentRequests);
+    setSelectedCustomerId((current) =>
+      data.customers.some((customer) => customer.id === current)
+        ? current
+        : data.customers[0]?.id ?? ""
+    );
+    setSelectedContractId((current) =>
+      data.contracts.some((contract) => contract.id === current)
+        ? current
+        : data.contracts[0]?.id ?? ""
+    );
+    setSelectedBillId((current) =>
+      data.bills.some((bill) => bill.id === current)
+        ? current
+        : data.bills[0]?.id ?? ""
+    );
+  }
+
+  function enterDemoMode(nextPeriodMonth = periodMonth) {
+    setDemoMode(true);
+    setToken(demoToken);
+    setUser(demoUser);
+    applyConsoleData(createDemoData(nextPeriodMonth));
+    setMessage("演示模式：无需后端，数据保存在当前页面");
+  }
+
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
+    if (demoMode) {
+      throw new Error("演示模式不会调用后端接口");
+    }
+
     const response = await fetch(`${apiBase}${path}`, {
       ...init,
       headers: {
@@ -137,54 +270,68 @@ export default function Home() {
   }
 
   async function refresh(nextToken = token) {
+    if (demoMode || nextToken === demoToken) {
+      enterDemoMode(periodMonth);
+      return;
+    }
+
     if (!nextToken) {
       return;
     }
 
     const authHeader = { Authorization: `Bearer ${nextToken}` };
+    const fetchJson = async <TValue,>(path: string): Promise<TValue> => {
+      const response = await fetch(`${apiBase}${path}`, { headers: authHeader });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || response.statusText);
+      }
+
+      return (await response.json()) as TValue;
+    };
     const [nextCustomers, nextContracts, nextBills, nextProfits, nextRequests] =
       await Promise.all([
-        fetch(`${apiBase}/customers`, { headers: authHeader }).then((res) =>
-          res.json()
-        ) as Promise<Customer[]>,
-        fetch(`${apiBase}/contracts`, { headers: authHeader }).then((res) =>
-          res.json()
-        ) as Promise<Contract[]>,
-        fetch(`${apiBase}/bills?periodMonth=${periodMonth}`, {
-          headers: authHeader
-        }).then((res) => res.json()) as Promise<Bill[]>,
-        fetch(`${apiBase}/reports/customer-profit?periodMonth=${periodMonth}`, {
-          headers: authHeader
-        }).then((res) => res.json()) as Promise<ProfitRow[]>,
-        fetch(`${apiBase}/payment-requests`, { headers: authHeader }).then(
-          (res) => res.json()
-        ) as Promise<PaymentRequest[]>
+        fetchJson<Customer[]>("/customers"),
+        fetchJson<Contract[]>("/contracts"),
+        fetchJson<Bill[]>(`/bills?periodMonth=${periodMonth}`),
+        fetchJson<ProfitRow[]>(
+          `/reports/customer-profit?periodMonth=${periodMonth}`
+        ),
+        fetchJson<PaymentRequest[]>("/payment-requests")
       ]);
 
-    setCustomers(nextCustomers);
-    setContracts(nextContracts);
-    setBills(nextBills);
-    setProfits(nextProfits);
-    setPaymentRequests(nextRequests);
-    setSelectedCustomerId((current) => current || nextCustomers[0]?.id || "");
-    setSelectedContractId((current) => current || nextContracts[0]?.id || "");
-    setSelectedBillId((current) => current || nextBills[0]?.id || "");
+    applyConsoleData({
+      customers: nextCustomers,
+      contracts: nextContracts,
+      bills: nextBills,
+      profits: nextProfits,
+      paymentRequests: nextRequests
+    });
     setMessage("数据已刷新");
   }
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result = await request<{
-      accessToken: string;
-      user: ApiUser;
-    }>("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password })
-    });
-    setToken(result.accessToken);
-    setUser(result.user);
-    setMessage(`已登录：${result.user.name}`);
-    await refresh(result.accessToken);
+    try {
+      const result = await request<{
+        accessToken: string;
+        user: ApiUser;
+      }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password })
+      });
+      setDemoMode(false);
+      setToken(result.accessToken);
+      setUser(result.user);
+      setMessage(`已登录：${result.user.name}`);
+      await refresh(result.accessToken);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `登录失败：${error.message}`
+          : "登录失败，请检查后端服务"
+      );
+    }
   }
 
   async function submitAction(
@@ -193,6 +340,11 @@ export default function Home() {
   ) {
     try {
       setMessage(`${label}处理中`);
+      if (demoMode) {
+        setMessage(`${label}已在演示模式模拟完成`);
+        return;
+      }
+
       await action();
       await refresh();
       setMessage(`${label}完成`);
@@ -222,6 +374,7 @@ export default function Home() {
         </nav>
         <div className="session">
           <span>{user?.name ?? "未登录"}</span>
+          {demoMode ? <small className="mode-pill">静态预览</small> : null}
           <small>{message}</small>
         </div>
       </aside>
@@ -230,7 +383,10 @@ export default function Home() {
         <header className="topbar">
           <div>
             <h1>财务业务控制台</h1>
-            <p>{active} · {periodMonth}</p>
+            <p>
+              {active} · {periodMonth}
+              {demoMode ? " · Demo" : ""}
+            </p>
           </div>
           <div className="toolbar">
             <input
@@ -238,7 +394,16 @@ export default function Home() {
               onChange={(event) => setPeriodMonth(event.target.value)}
               value={periodMonth}
             />
-            <button onClick={() => void refresh()} type="button">
+            <button
+              onClick={() =>
+                void refresh().catch((error: unknown) =>
+                  setMessage(
+                    error instanceof Error ? error.message : "刷新失败"
+                  )
+                )
+              }
+              type="button"
+            >
               刷新
             </button>
           </div>
@@ -250,6 +415,7 @@ export default function Home() {
               <label>
                 邮箱
                 <input
+                  autoComplete="email"
                   onChange={(event) => setEmail(event.target.value)}
                   value={email}
                 />
@@ -257,6 +423,7 @@ export default function Home() {
               <label>
                 密码
                 <input
+                  autoComplete="current-password"
                   onChange={(event) => setPassword(event.target.value)}
                   type="password"
                   value={password}
@@ -264,6 +431,13 @@ export default function Home() {
               </label>
               <button className="primary" type="submit">
                 登录
+              </button>
+              <button
+                className="secondary"
+                onClick={() => enterDemoMode()}
+                type="button"
+              >
+                进入演示
               </button>
             </form>
           </section>

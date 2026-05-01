@@ -56,6 +56,12 @@ form button[type="submit"] {
   color: #ffffff;
 }
 
+button.secondary {
+  background: #f7fbf9;
+  border-color: #8ebbb1;
+  color: var(--accent-strong);
+}
+
 input,
 select {
   width: 100%;
@@ -125,6 +131,15 @@ select {
   padding-top: 16px;
 }
 
+.mode-pill {
+  background: #d7f3e9;
+  border-radius: 999px;
+  color: #075f55;
+  display: inline-flex;
+  justify-self: start;
+  padding: 4px 8px;
+}
+
 .main {
   min-width: 0;
   padding: 22px;
@@ -171,7 +186,7 @@ select {
 .login-panel form {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(180px, 260px) minmax(180px, 260px) 96px;
+  grid-template-columns: minmax(180px, 260px) minmax(180px, 260px) 96px 112px;
 }
 
 label {

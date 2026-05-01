@@ -24,8 +24,21 @@ pnpm.cmd infra:up
 pnpm.cmd db:generate
 pnpm.cmd db:migrate
 pnpm.cmd db:seed
+pnpm.cmd db:seed:demo
 pnpm.cmd dev
 ```
+
+## 线上预览
+
+推送到 `main` 后，`.github/workflows/pages-preview.yml` 会构建 Web 静态预览并部署到 GitHub Pages。预览页内置“进入演示”模式，可以在没有数据库和 API 的情况下查看 2026-04 的客户、合同、账单、收款、付款申请和利润数据。
+
+GitHub 仓库首次使用 Pages 时，在 Settings → Pages 中将 Source 设为 **GitHub Actions**。部署完成后的地址通常是：
+
+```text
+https://codywiki.github.io/erpdog/
+```
+
+如果仓库名不是 `erpdog`，同步调整 `.github/workflows/pages-preview.yml` 里的 `NEXT_BASE_PATH`。
 
 当前已有文档：
 
@@ -44,3 +57,7 @@ pnpm.cmd dev
 - 成本、应付、付款申请、审批、付款登记和应付余额更新。
 - 月度结账/解锁、审计日志、附件元数据、客户利润和负责人排行报表。
 - Worker 支持账单生成队列和 Outbox 处理占位，后续可接飞书适配器。
+
+## 预览数据
+
+本地或预览环境执行 `pnpm db:seed:demo` 会写入一组 2026-04 演示业务数据，包含示例客户、合同、账单、收款、成本、应付和付款申请。管理员账号仍由 `pnpm db:seed` 根据 `.env` 里的 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 创建。
