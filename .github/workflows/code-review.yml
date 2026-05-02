@@ -16,6 +16,20 @@ jobs:
   review:
     name: Review checks
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: erpdog
+          POSTGRES_PASSWORD: erpdog
+          POSTGRES_DB: erpdog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erpdog -d erpdog"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://erpdog:erpdog@localhost:5432/erpdog?schema=public
       JWT_SECRET: ci-secret-with-at-least-24-chars
@@ -53,6 +67,12 @@ jobs:
       - name: Build
         run: corepack pnpm -r build
 
+      - name: Apply database migrations
+        run: corepack pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+
+      - name: Run business e2e
+        run: corepack pnpm test:e2e
+
       - name: Audit dependencies
         run: corepack pnpm audit --audit-level moderate
 
@@ -67,5 +87,6 @@ jobs:
             echo "- Git whitespace check"
             echo "- Workspace typecheck"
             echo "- Workspace build"
+            echo "- Business e2e flow"
             echo "- Moderate-and-above dependency audit"
           } >> "$GITHUB_STEP_SUMMARY"

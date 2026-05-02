@@ -52,6 +52,21 @@ export class ContractsController {
     return this.contracts.importContracts(user, body);
   }
 
+  @Get("import-template")
+  @RequirePermissions(PERMISSION_CODES.CONTRACT_WRITE)
+  contractImportTemplate() {
+    return this.contracts.contractImportTemplate();
+  }
+
+  @Post("import-xlsx")
+  @RequirePermissions(PERMISSION_CODES.CONTRACT_WRITE)
+  importContractsWorkbook(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
+    return this.contracts.importContractsWorkbook(user, body);
+  }
+
   @Get("charge-rule-templates")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,

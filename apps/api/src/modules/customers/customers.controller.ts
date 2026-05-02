@@ -52,6 +52,21 @@ export class CustomersController {
     return this.customers.importCustomers(user, body);
   }
 
+  @Get("import-template")
+  @RequirePermissions(PERMISSION_CODES.CUSTOMER_WRITE)
+  customerImportTemplate() {
+    return this.customers.customerImportTemplate();
+  }
+
+  @Post("import-xlsx")
+  @RequirePermissions(PERMISSION_CODES.CUSTOMER_WRITE)
+  importCustomersWorkbook(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
+    return this.customers.importCustomersWorkbook(user, body);
+  }
+
   @Get(":id")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,

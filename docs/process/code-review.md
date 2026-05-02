@@ -15,7 +15,14 @@ pnpm -r build
 pnpm audit --audit-level moderate
 ```
 
-The GitHub `Code Review Gate` workflow runs the same checks on pull requests.
+For backend workflow changes, also run the full business e2e when PostgreSQL is available:
+
+```bash
+pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+pnpm test:e2e
+```
+
+The GitHub `Code Review Gate` workflow runs formatting, whitespace, typecheck, build, dependency audit, database migrations, and the business e2e flow on pull requests.
 
 ## Reviewer checklist
 
@@ -26,6 +33,7 @@ The GitHub `Code Review Gate` workflow runs the same checks on pull requests.
 - Check migrations preserve existing data and seed scripts still work.
 - Check user-facing errors are actionable without exposing sensitive internals.
 - Check preview or screenshots for user-facing UI changes.
+- Check Excel import/export and attachment changes against the formal operations guide when those surfaces are touched.
 
 ## Merge policy
 

@@ -315,6 +315,33 @@ export class FinanceController {
     });
   }
 
+  @Get("attachments/:id/download-url")
+  @RequirePermissions(
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
+    PERMISSION_CODES.CUSTOMER_READ_OWN,
+  )
+  attachmentDownloadUrl(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.finance.attachmentDownloadUrl(user, id);
+  }
+
+  @Post("attachments/presign-upload")
+  @RequirePermissions(
+    PERMISSION_CODES.BILL_MANAGE,
+    PERMISSION_CODES.INVOICE_MANAGE,
+    PERMISSION_CODES.RECEIPT_MANAGE,
+    PERMISSION_CODES.COST_MANAGE,
+    PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+  )
+  createAttachmentUploadUrl(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
+    return this.finance.createAttachmentUploadUrl(user, body);
+  }
+
   @Post("attachments")
   @RequirePermissions(
     PERMISSION_CODES.BILL_MANAGE,
@@ -330,6 +357,15 @@ export class FinanceController {
     return this.finance.createAttachment(user, body);
   }
 
+  @Get("reports/customer-profit/export")
+  @RequirePermissions(PERMISSION_CODES.REPORT_VIEW)
+  customerProfitExport(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("periodMonth") periodMonth?: string,
+  ) {
+    return this.finance.customerProfitWorkbook(user, periodMonth);
+  }
+
   @Get("reports/customer-profit")
   @RequirePermissions(PERMISSION_CODES.REPORT_VIEW)
   customerProfit(
@@ -337,6 +373,15 @@ export class FinanceController {
     @Query("periodMonth") periodMonth?: string,
   ) {
     return this.finance.customerProfit(user, periodMonth);
+  }
+
+  @Get("reports/owner-ranking/export")
+  @RequirePermissions(PERMISSION_CODES.REPORT_VIEW)
+  ownerRankingExport(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("periodMonth") periodMonth?: string,
+  ) {
+    return this.finance.ownerRankingWorkbook(user, periodMonth);
   }
 
   @Get("reports/owner-ranking")

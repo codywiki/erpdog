@@ -20,11 +20,13 @@ import {
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
 import { AuditService } from "../../common/audit/audit.service";
+import { ExcelService } from "../../common/excel/excel.service";
 import {
   parsePeriodMonth,
   PeriodLockService,
 } from "../../common/periods/period-lock.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import { StorageService } from "../../common/storage/storage.service";
 import {
   assertMoneyEquals,
   decimalString,
@@ -63,13 +65,29 @@ type PaymentAllocationInput = {
   amount: Prisma.Decimal;
 };
 
+type AttachmentRecord = {
+  id: string;
+  orgId: string;
+  ownerType: string | null;
+  ownerId: string | null;
+  fileName: string;
+  contentType: string | null;
+  sizeBytes: bigint | null;
+  storageKey: string;
+  url: string | null;
+  uploadedById: string | null;
+  createdAt: Date;
+};
+
 @Injectable()
 export class FinanceService {
   constructor(
     private readonly audit: AuditService,
     private readonly customers: CustomersService,
+    private readonly excel: ExcelService,
     private readonly periodLocks: PeriodLockService,
     private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
   ) {}
 
   listExtraChargeCategories(user: AuthenticatedUser) {
@@ -1303,7 +1321,11 @@ export class FinanceService {
       this.prisma.attachment.count({ where }),
     ]);
 
-    return paginated(items, total, pagination);
+    return paginated(
+      items.map((attachment) => this.presentAttachment(attachment)),
+      total,
+      pagination,
+    );
   }
 
   async createAttachment(user: AuthenticatedUser, rawBody: unknown) {
@@ -1319,10 +1341,7 @@ export class FinanceService {
         ownerId,
         fileName: stringField(body, "fileName"),
         contentType: optionalString(body, "contentType"),
-        sizeBytes:
-          typeof body.sizeBytes === "number"
-            ? BigInt(body.sizeBytes)
-            : undefined,
+        sizeBytes: this.attachmentSize(body),
         storageKey:
           optionalString(body, "storageKey") ??
           `attachments/${user.orgId}/${Date.now()}-${stringField(body, "fileName")}`,
@@ -1343,7 +1362,82 @@ export class FinanceService {
       },
     });
 
-    return attachment;
+    return this.presentAttachment(attachment);
+  }
+
+  async createAttachmentUploadUrl(user: AuthenticatedUser, rawBody: unknown) {
+    const body = bodyObject(rawBody);
+    const ownerType = optionalString(body, "ownerType");
+    const ownerId = optionalString(body, "ownerId");
+    await this.ensureAttachmentOwnerAccess(user, ownerType, ownerId);
+
+    const fileName = stringField(body, "fileName");
+    const contentType = optionalString(body, "contentType");
+    const sizeBytes = this.attachmentSize(body);
+    const presigned = await this.storage.createPresignedUpload({
+      orgId: user.orgId,
+      fileName,
+      contentType,
+      sizeBytes: sizeBytes === undefined ? undefined : Number(sizeBytes),
+    });
+
+    const attachment = await this.prisma.attachment.create({
+      data: {
+        orgId: user.orgId,
+        ownerType,
+        ownerId,
+        fileName,
+        contentType,
+        sizeBytes,
+        storageKey: presigned.storageKey,
+        uploadedById: user.id,
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "attachment.presign_upload",
+      entityType: "attachment",
+      entityId: attachment.id,
+      after: {
+        fileName: attachment.fileName,
+        storageKey: attachment.storageKey,
+      },
+    });
+
+    return {
+      attachment: this.presentAttachment(attachment),
+      upload: presigned.upload,
+    };
+  }
+
+  async attachmentDownloadUrl(user: AuthenticatedUser, id: string) {
+    const attachment = await this.prisma.attachment.findFirst({
+      where: { id, orgId: user.orgId },
+    });
+    if (!attachment) {
+      throw new NotFoundException("Attachment not found.");
+    }
+
+    await this.ensureAttachmentAccess(user, attachment);
+    if (attachment.url) {
+      return {
+        attachment: this.presentAttachment(attachment),
+        download: {
+          url: attachment.url,
+          expiresIn: null,
+        },
+      };
+    }
+
+    return {
+      attachment: this.presentAttachment(attachment),
+      download: await this.storage.createPresignedDownload(
+        attachment.storageKey,
+        attachment.fileName,
+      ),
+    };
   }
 
   async customerProfit(user: AuthenticatedUser, periodMonth?: string) {
@@ -1453,6 +1547,68 @@ export class FinanceService {
           new Prisma.Decimal(a.profitAmount),
         ),
       );
+  }
+
+  async customerProfitWorkbook(user: AuthenticatedUser, periodMonth?: string) {
+    const rows = await this.customerProfit(user, periodMonth);
+    return this.excel.createWorkbook(
+      `customer-profit-${periodMonth ?? "all"}.xlsx`,
+      [
+        {
+          name: "客户利润",
+          headers: [
+            "期间",
+            "客户编码",
+            "客户名称",
+            "负责人",
+            "收入",
+            "成本",
+            "利润",
+            "毛利率%",
+          ],
+          rows: rows.map((row) => ({
+            期间: row.periodMonth,
+            客户编码: row.customerCode,
+            客户名称: row.customerName,
+            负责人: row.ownerNames.join(", "),
+            收入: row.incomeAmount,
+            成本: row.costAmount,
+            利润: row.profitAmount,
+            "毛利率%": row.grossMargin ?? "",
+          })),
+        },
+      ],
+    );
+  }
+
+  async ownerRankingWorkbook(user: AuthenticatedUser, periodMonth?: string) {
+    const rows = await this.ownerRanking(user, periodMonth);
+    return this.excel.createWorkbook(
+      `owner-ranking-${periodMonth ?? "all"}.xlsx`,
+      [
+        {
+          name: "负责人排行",
+          headers: [
+            "排名",
+            "期间",
+            "负责人",
+            "收入",
+            "成本",
+            "利润",
+            "毛利率%",
+          ],
+          rows: rows.map((row, index) => ({
+            排名: index + 1,
+            期间: row.periodMonth,
+            负责人: row.ownerName,
+            收入: row.incomeAmount,
+            成本: row.costAmount,
+            利润: row.profitAmount,
+            "毛利率%": row.grossMargin ?? "",
+          })),
+        },
+      ],
+    );
   }
 
   private async decidePaymentRequest(
@@ -1894,6 +2050,59 @@ export class FinanceService {
     if (!category) {
       throw new NotFoundException("Cost category not found.");
     }
+  }
+
+  private attachmentSize(body: Payload) {
+    const value = body.sizeBytes;
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const parsed =
+      typeof value === "bigint"
+        ? value
+        : typeof value === "number" && Number.isInteger(value)
+          ? BigInt(value)
+          : typeof value === "string" && /^\d+$/.test(value)
+            ? BigInt(value)
+            : undefined;
+
+    if (parsed === undefined || parsed <= 0n) {
+      throw new BadRequestException("sizeBytes must be a positive integer.");
+    }
+
+    return parsed;
+  }
+
+  private presentAttachment(attachment: AttachmentRecord) {
+    return {
+      ...attachment,
+      sizeBytes: attachment.sizeBytes?.toString() ?? null,
+    };
+  }
+
+  private async ensureAttachmentAccess(
+    user: AuthenticatedUser,
+    attachment: AttachmentRecord,
+  ) {
+    if (user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
+      return;
+    }
+
+    if (attachment.uploadedById === user.id) {
+      return;
+    }
+
+    if (attachment.ownerType && attachment.ownerId) {
+      await this.ensureAttachmentOwnerAccess(
+        user,
+        attachment.ownerType,
+        attachment.ownerId,
+      );
+      return;
+    }
+
+    throw new ForbiddenException("You can only access your own attachments.");
   }
 
   private async ensureAttachmentOwnerAccess(

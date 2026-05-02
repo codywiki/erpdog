@@ -53,11 +53,12 @@ https://codywiki.github.io/erpdog/
 ## 当前业务能力
 
 - 客户、联系人、开票资料、负责人绑定和客户级数据权限。
-- 合同、收费项、收费模板和合同导入。
+- 客户/合同 Excel 模板、Excel 导入、合同收费项批量导入。
 - 增值服务、代垫费用、月度账单生成、账单状态流、客户确认、调整和作废。
 - 发票/收款独立对象和到账单的金额分摊。
 - 成本、应付、付款申请、审批、付款登记和应付余额更新。
-- 月度结账/解锁、审计日志、附件元数据、客户利润和负责人排行报表。
+- S3 兼容附件预签名上传/下载、附件权限校验、附件元数据。
+- 月度结账/解锁、审计日志、客户利润和负责人排行报表及 Excel 导出。
 - Worker 支持账单生成队列和 Outbox 处理占位，后续可接飞书适配器。
 
 ## 代码审查
@@ -73,7 +74,14 @@ pnpm -r build
 pnpm audit --audit-level moderate
 ```
 
-PR 会自动触发 `Code Review Gate` 工作流，并使用 `.github/pull_request_template.md` 中的业务、权限、金额、锁账和用户体验清单完成审查。
+涉及后端业务流时，在本地 PostgreSQL 可用后额外执行：
+
+```bash
+pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+pnpm test:e2e
+```
+
+PR 会自动触发 `Code Review Gate` 工作流，并使用 `.github/pull_request_template.md` 中的业务、权限、金额、锁账和用户体验清单完成审查。该工作流也会启动 PostgreSQL、应用迁移并跑完整业务 e2e。
 
 ## 正式使用
 

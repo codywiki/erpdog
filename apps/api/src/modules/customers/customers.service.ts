@@ -9,6 +9,7 @@ import { CustomerStatus, Prisma } from "@prisma/client";
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
 import { AuditService } from "../../common/audit/audit.service";
+import { ExcelService } from "../../common/excel/excel.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import {
   paginated,
@@ -29,10 +30,31 @@ type CustomerFilters = {
   status?: string;
 } & PaginationQuery;
 
+const CUSTOMER_IMPORT_HEADERS = [
+  "客户编码",
+  "客户名称",
+  "状态",
+  "行业",
+  "来源",
+  "负责人邮箱",
+  "联系人姓名",
+  "联系人职务",
+  "联系人电话",
+  "联系人邮箱",
+  "开票抬头",
+  "税号",
+  "开户行",
+  "银行账号",
+  "开票地址",
+  "开票电话",
+  "备注",
+];
+
 @Injectable()
 export class CustomersService {
   constructor(
     private readonly audit: AuditService,
+    private readonly excel: ExcelService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -309,6 +331,67 @@ export class CustomersService {
     };
   }
 
+  customerImportTemplate() {
+    return this.excel.createWorkbook("customers-import-template.xlsx", [
+      {
+        name: "客户导入",
+        headers: CUSTOMER_IMPORT_HEADERS,
+        rows: [],
+      },
+      {
+        name: "字段说明",
+        headers: ["字段", "说明"],
+        rows: [
+          { 字段: "客户编码", 说明: "必填，同一组织内唯一。" },
+          { 字段: "客户名称", 说明: "必填，客户正式名称。" },
+          {
+            字段: "状态",
+            说明: "可选：ACTIVE/PAUSED/TERMINATED，或 正常/暂停/终止。",
+          },
+          {
+            字段: "负责人邮箱",
+            说明: "可填多个，用逗号、分号或顿号分隔；为空时默认当前导入人。",
+          },
+          {
+            字段: "联系人姓名",
+            说明: "可选，填写后会同步创建主联系人。",
+          },
+          {
+            字段: "开票抬头",
+            说明: "可选，填写后会同步创建默认开票资料。",
+          },
+        ],
+      },
+    ]);
+  }
+
+  async importCustomersWorkbook(user: AuthenticatedUser, rawBody: unknown) {
+    const rows = (await this.excel.rowsFromBase64(rawBody))
+      .map((row, index) => ({ rowNumber: index + 2, row }))
+      .filter(({ row }) => !this.isEmptyImportRow(row));
+    const results: Array<{ row: number; id?: string; error?: string }> = [];
+
+    for (const { rowNumber, row } of rows) {
+      try {
+        const payload = await this.customerImportPayload(user, row);
+        const created = await this.create(user, payload);
+        results.push({ row: rowNumber, id: created.id });
+      } catch (error) {
+        results.push({
+          row: rowNumber,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    }
+
+    return {
+      total: rows.length,
+      succeeded: results.filter((result) => result.id).length,
+      failed: results.filter((result) => result.error).length,
+      results,
+    };
+  }
+
   async ensureCustomerAccess(user: AuthenticatedUser, customerId: string) {
     const customer = await this.prisma.customer.findFirst({
       where: {
@@ -440,5 +523,134 @@ export class CustomersService {
       phone: optionalString(body, "phone"),
       isDefault: booleanField(body, "isDefault"),
     };
+  }
+
+  private async customerImportPayload(
+    user: AuthenticatedUser,
+    row: Record<string, unknown>,
+  ): Promise<Payload> {
+    const ownerEmails = this.splitList(
+      this.cell(row, ["负责人邮箱", "ownerEmails", "Owner Emails"]),
+    );
+    const ownerUserIds = ownerEmails.length
+      ? await this.resolveOwnerUserIds(user, ownerEmails)
+      : [];
+    const contactName = this.cell(row, ["联系人姓名", "contactName"]);
+    const billingTitle = this.cell(row, ["开票抬头", "billingTitle"]);
+
+    return {
+      code: this.cell(row, ["客户编码", "code", "Code"]),
+      name: this.cell(row, ["客户名称", "name", "Name"]),
+      status: this.customerStatusFromCell(this.cell(row, ["状态", "status"])),
+      industry: this.cell(row, ["行业", "industry"]),
+      source: this.cell(row, ["来源", "source"]),
+      notes: this.cell(row, ["备注", "notes"]),
+      ownerUserIds,
+      contacts: contactName
+        ? [
+            {
+              name: contactName,
+              title: this.cell(row, ["联系人职务", "contactTitle"]),
+              phone: this.cell(row, ["联系人电话", "contactPhone"]),
+              email: this.cell(row, ["联系人邮箱", "contactEmail"]),
+              isPrimary: true,
+            },
+          ]
+        : [],
+      billingProfiles: billingTitle
+        ? [
+            {
+              title: billingTitle,
+              taxNumber: this.cell(row, ["税号", "taxNumber"]),
+              bankName: this.cell(row, ["开户行", "bankName"]),
+              bankAccount: this.cell(row, ["银行账号", "bankAccount"]),
+              address: this.cell(row, ["开票地址", "billingAddress"]),
+              phone: this.cell(row, ["开票电话", "billingPhone"]),
+              isDefault: true,
+            },
+          ]
+        : [],
+    };
+  }
+
+  private async resolveOwnerUserIds(
+    user: AuthenticatedUser,
+    ownerEmails: string[],
+  ) {
+    const users = await this.prisma.user.findMany({
+      where: {
+        orgId: user.orgId,
+        email: { in: ownerEmails.map((email) => email.toLowerCase()) },
+        isActive: true,
+      },
+      select: { id: true, email: true },
+    });
+    const byEmail = new Map(
+      users.map((owner) => [owner.email.toLowerCase(), owner.id]),
+    );
+    const missing = ownerEmails.filter(
+      (email) => !byEmail.has(email.toLowerCase()),
+    );
+    if (missing.length) {
+      throw new BadRequestException(
+        `Owner email not found in organization: ${missing.join(", ")}`,
+      );
+    }
+    return ownerEmails.map((email) => byEmail.get(email.toLowerCase())!);
+  }
+
+  private customerStatusFromCell(value?: string) {
+    if (!value) {
+      return undefined;
+    }
+
+    const normalized = value.trim().toUpperCase();
+    const aliases: Record<string, CustomerStatus> = {
+      ACTIVE: CustomerStatus.ACTIVE,
+      NORMAL: CustomerStatus.ACTIVE,
+      PAUSED: CustomerStatus.PAUSED,
+      TERMINATED: CustomerStatus.TERMINATED,
+      正常: CustomerStatus.ACTIVE,
+      启用: CustomerStatus.ACTIVE,
+      暂停: CustomerStatus.PAUSED,
+      终止: CustomerStatus.TERMINATED,
+      停用: CustomerStatus.TERMINATED,
+    };
+
+    return aliases[normalized] ?? CustomerStatus.ACTIVE;
+  }
+
+  private splitList(value?: string) {
+    return Array.from(
+      new Set(
+        (value ?? "")
+          .split(/[,;，；、]/)
+          .map((item) => item.trim())
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private cell(row: Record<string, unknown>, aliases: string[]) {
+    for (const alias of aliases) {
+      const value = row[alias];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return String(value);
+      }
+    }
+
+    return undefined;
+  }
+
+  private isEmptyImportRow(row: Record<string, unknown>) {
+    return Object.values(row).every((value) => {
+      if (value === null || value === undefined) {
+        return true;
+      }
+      return String(value).trim() === "";
+    });
   }
 }

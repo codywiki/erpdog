@@ -30,6 +30,34 @@ NEXT_PUBLIC_API_URL=https://api.example.com/api/v1
 5. Import or create customers and contracts.
 6. Verify one test billing period before using the system for real month-end work.
 
+## Data import and export
+
+Use backend-generated templates for production imports instead of hand-built spreadsheets:
+
+- Download customer template from `GET /api/v1/customers/import-template`.
+- Import customers with `POST /api/v1/customers/import-xlsx`, passing `contentBase64` and optional `sheetName`.
+- Download contract template from `GET /api/v1/contracts/import-template`.
+- Import contracts with `POST /api/v1/contracts/import-xlsx`, passing `contentBase64` and optional `sheetName`.
+
+Customer import supports owners by email, contacts, and default billing profiles. Contract import resolves customers by customer code and supports multiple charge items by repeating the same contract code across rows.
+
+Reports can be exported for reconciliation:
+
+- `GET /api/v1/reports/customer-profit/export?periodMonth=YYYY-MM`
+- `GET /api/v1/reports/owner-ranking/export?periodMonth=YYYY-MM`
+
+Both endpoints return a JSON payload containing `fileName`, `contentType`, and `contentBase64`.
+
+## Attachments
+
+Production attachments should use S3-compatible storage instead of arbitrary public URLs.
+
+1. Configure `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, and `S3_FORCE_PATH_STYLE`.
+2. Request an upload URL through `POST /api/v1/attachments/presign-upload`.
+3. Upload the file with HTTP `PUT` using the returned URL and `Content-Type` header.
+4. Store the returned attachment id on bills, receipts, cost entries, payment requests, or related owner objects.
+5. Download through `GET /api/v1/attachments/:id/download-url` so permissions are checked before a temporary URL is issued.
+
 ## User and audit setup
 
 - Create named accounts for every internal user instead of sharing the administrator account.

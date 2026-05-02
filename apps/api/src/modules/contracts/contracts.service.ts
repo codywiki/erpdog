@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -8,6 +9,7 @@ import { ChargeItemKind, ContractStatus, Prisma } from "@prisma/client";
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
 import { AuditService } from "../../common/audit/audit.service";
+import { ExcelService } from "../../common/excel/excel.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { decimal, optionalDecimal } from "../../common/utils/finance";
 import {
@@ -33,11 +35,33 @@ type ContractFilters = {
   status?: string;
 } & PaginationQuery;
 
+const CONTRACT_IMPORT_HEADERS = [
+  "合同编码",
+  "合同名称",
+  "客户编码",
+  "状态",
+  "开始日期",
+  "结束日期",
+  "账期日",
+  "币种",
+  "合同备注",
+  "收费项名称",
+  "收费类型",
+  "金额",
+  "数量",
+  "单位",
+  "收费说明",
+  "生效日",
+  "失效日",
+  "是否启用",
+];
+
 @Injectable()
 export class ContractsService {
   constructor(
     private readonly audit: AuditService,
     private readonly customers: CustomersService,
+    private readonly excel: ExcelService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -315,6 +339,94 @@ export class ContractsService {
     };
   }
 
+  contractImportTemplate() {
+    return this.excel.createWorkbook("contracts-import-template.xlsx", [
+      {
+        name: "合同导入",
+        headers: CONTRACT_IMPORT_HEADERS,
+        rows: [],
+      },
+      {
+        name: "字段说明",
+        headers: ["字段", "说明"],
+        rows: [
+          { 字段: "合同编码", 说明: "必填，同一组织内唯一。" },
+          { 字段: "客户编码", 说明: "必填，必须匹配已存在客户编码。" },
+          {
+            字段: "状态",
+            说明: "可选：DRAFT/ACTIVE/SUSPENDED/EXPIRED/TERMINATED。",
+          },
+          {
+            字段: "收费类型",
+            说明: "可选：FIXED/VARIABLE/DISCOUNT/WAIVER/MANUAL，或 固定/变量/折扣/减免/手工。",
+          },
+          {
+            字段: "多收费项",
+            说明: "同一合同编码可填写多行，每行会作为一个收费项。",
+          },
+        ],
+      },
+    ]);
+  }
+
+  async importContractsWorkbook(user: AuthenticatedUser, rawBody: unknown) {
+    const rows = (await this.excel.rowsFromBase64(rawBody))
+      .map((row, index) => ({ rowNumber: index + 2, row }))
+      .filter(({ row }) => !this.isEmptyImportRow(row));
+    const grouped = new Map<
+      string,
+      {
+        rowNumber: number;
+        row: Record<string, unknown>;
+        chargeItems: Payload[];
+      }
+    >();
+    const results: Array<{ row: number; id?: string; error?: string }> = [];
+    let invalidRowCount = 0;
+
+    for (const { rowNumber, row } of rows) {
+      const code = this.cell(row, ["合同编码", "code", "Code"]);
+      if (!code) {
+        invalidRowCount += 1;
+        results.push({ row: rowNumber, error: "合同编码 is required." });
+        continue;
+      }
+
+      const group = grouped.get(code) ?? {
+        rowNumber,
+        row,
+        chargeItems: [],
+      };
+      const chargeItem = this.chargeItemImportPayload(row);
+      if (chargeItem) {
+        group.chargeItems.push(chargeItem);
+      }
+      grouped.set(code, group);
+    }
+
+    for (const group of grouped.values()) {
+      try {
+        const payload = await this.contractImportPayload(user, group);
+        const created = await this.create(user, payload);
+        results.push({ row: group.rowNumber, id: created.id });
+      } catch (error) {
+        results.push({
+          row: group.rowNumber,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    }
+
+    const sortedResults = results.sort((a, b) => a.row - b.row);
+    return {
+      total: grouped.size + invalidRowCount,
+      totalRows: rows.length,
+      succeeded: sortedResults.filter((result) => result.id).length,
+      failed: sortedResults.filter((result) => result.error).length,
+      results: sortedResults,
+    };
+  }
+
   listTemplates(user: AuthenticatedUser) {
     return this.prisma.chargeRuleTemplate.findMany({
       where: { orgId: user.orgId, isActive: true },
@@ -404,5 +516,190 @@ export class ContractsService {
         orderBy: { createdAt: "asc" },
       },
     } satisfies Prisma.ContractInclude;
+  }
+
+  private async contractImportPayload(
+    user: AuthenticatedUser,
+    group: {
+      rowNumber: number;
+      row: Record<string, unknown>;
+      chargeItems: Payload[];
+    },
+  ): Promise<Payload> {
+    const customerCode = this.cell(group.row, ["客户编码", "customerCode"]);
+    if (!customerCode) {
+      throw new BadRequestException("客户编码 is required.");
+    }
+
+    const customer = await this.prisma.customer.findFirst({
+      where: { orgId: user.orgId, code: customerCode },
+      select: { id: true },
+    });
+    if (!customer) {
+      throw new NotFoundException(`Customer not found: ${customerCode}`);
+    }
+
+    return {
+      customerId: customer.id,
+      code: this.cell(group.row, ["合同编码", "code", "Code"]),
+      name: this.cell(group.row, ["合同名称", "name", "Name"]),
+      status: this.contractStatusFromCell(
+        this.cell(group.row, ["状态", "status"]),
+      ),
+      startDate: this.dateCell(group.row, ["开始日期", "startDate"]),
+      endDate: this.dateCell(group.row, ["结束日期", "endDate"]),
+      billingDay: this.intCell(group.row, ["账期日", "billingDay"]) ?? 1,
+      currency: this.cell(group.row, ["币种", "currency"]) ?? "CNY",
+      notes: this.cell(group.row, ["合同备注", "notes"]),
+      chargeItems: group.chargeItems,
+    };
+  }
+
+  private chargeItemImportPayload(row: Record<string, unknown>) {
+    const name = this.cell(row, ["收费项名称", "chargeItemName", "name"]);
+    if (!name) {
+      return undefined;
+    }
+
+    return {
+      name,
+      kind: this.chargeItemKindFromCell(this.cell(row, ["收费类型", "kind"])),
+      amount: this.cell(row, ["金额", "amount"]),
+      quantity: this.cell(row, ["数量", "quantity"]) ?? "1",
+      unit: this.cell(row, ["单位", "unit"]),
+      description: this.cell(row, ["收费说明", "description"]),
+      startsAt: this.dateCell(row, ["生效日", "startsAt"]),
+      endsAt: this.dateCell(row, ["失效日", "endsAt"]),
+      isActive: this.booleanCell(row, ["是否启用", "isActive"]),
+    };
+  }
+
+  private contractStatusFromCell(value?: string) {
+    if (!value) {
+      return undefined;
+    }
+
+    const normalized = value.trim().toUpperCase();
+    const aliases: Record<string, ContractStatus> = {
+      DRAFT: ContractStatus.DRAFT,
+      ACTIVE: ContractStatus.ACTIVE,
+      SUSPENDED: ContractStatus.SUSPENDED,
+      EXPIRED: ContractStatus.EXPIRED,
+      TERMINATED: ContractStatus.TERMINATED,
+      草稿: ContractStatus.DRAFT,
+      生效: ContractStatus.ACTIVE,
+      有效: ContractStatus.ACTIVE,
+      暂停: ContractStatus.SUSPENDED,
+      过期: ContractStatus.EXPIRED,
+      终止: ContractStatus.TERMINATED,
+    };
+
+    return aliases[normalized] ?? ContractStatus.DRAFT;
+  }
+
+  private chargeItemKindFromCell(value?: string) {
+    if (!value) {
+      return ChargeItemKind.FIXED;
+    }
+
+    const normalized = value.trim().toUpperCase();
+    const aliases: Record<string, ChargeItemKind> = {
+      FIXED: ChargeItemKind.FIXED,
+      VARIABLE: ChargeItemKind.VARIABLE,
+      DISCOUNT: ChargeItemKind.DISCOUNT,
+      WAIVER: ChargeItemKind.WAIVER,
+      MANUAL: ChargeItemKind.MANUAL,
+      固定: ChargeItemKind.FIXED,
+      变量: ChargeItemKind.VARIABLE,
+      浮动: ChargeItemKind.VARIABLE,
+      折扣: ChargeItemKind.DISCOUNT,
+      减免: ChargeItemKind.WAIVER,
+      手工: ChargeItemKind.MANUAL,
+    };
+
+    return aliases[normalized] ?? ChargeItemKind.FIXED;
+  }
+
+  private rawCell(row: Record<string, unknown>, aliases: string[]) {
+    for (const alias of aliases) {
+      const value = row[alias];
+      if (value !== undefined && value !== null && String(value).trim()) {
+        return value;
+      }
+    }
+
+    return undefined;
+  }
+
+  private cell(row: Record<string, unknown>, aliases: string[]) {
+    const value = this.rawCell(row, aliases);
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value instanceof Date) {
+      return value.toISOString().slice(0, 10);
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === "boolean") {
+      return value ? "true" : "false";
+    }
+    return String(value).trim();
+  }
+
+  private dateCell(row: Record<string, unknown>, aliases: string[]) {
+    const value = this.rawCell(row, aliases);
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value instanceof Date) {
+      return value.toISOString().slice(0, 10);
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      const excelEpoch = Date.UTC(1899, 11, 30);
+      return new Date(excelEpoch + value * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+    }
+    return String(value).trim();
+  }
+
+  private intCell(row: Record<string, unknown>, aliases: string[]) {
+    const value = this.rawCell(row, aliases);
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+    if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+      return Number(value.trim());
+    }
+    return undefined;
+  }
+
+  private booleanCell(row: Record<string, unknown>, aliases: string[]) {
+    const value = this.rawCell(row, aliases);
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (value === undefined) {
+      return undefined;
+    }
+    const normalized = String(value).trim().toLowerCase();
+    if (["true", "1", "yes", "y", "是", "启用"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "0", "no", "n", "否", "停用"].includes(normalized)) {
+      return false;
+    }
+    return undefined;
+  }
+
+  private isEmptyImportRow(row: Record<string, unknown>) {
+    return Object.values(row).every((value) => {
+      if (value === null || value === undefined) {
+        return true;
+      }
+      return String(value).trim() === "";
+    });
   }
 }
