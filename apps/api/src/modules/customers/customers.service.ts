@@ -32,7 +32,8 @@ type CustomerFilters = {
 
 const CUSTOMER_IMPORT_HEADERS = [
   "客户编码",
-  "客户名称",
+  "客户简称",
+  "客户全称",
   "状态",
   "行业",
   "来源",
@@ -66,6 +67,7 @@ export class CustomersService {
         ? {
             OR: [
               { name: { contains: filters.q, mode: "insensitive" } },
+              { fullName: { contains: filters.q, mode: "insensitive" } },
               { code: { contains: filters.q, mode: "insensitive" } },
             ],
           }
@@ -114,6 +116,8 @@ export class CustomersService {
           orgId: user.orgId,
           code: stringField(body, "code"),
           name: stringField(body, "name"),
+          fullName:
+            optionalString(body, "fullName") ?? stringField(body, "name"),
           status: this.status(body),
           industry: optionalString(body, "industry"),
           source: optionalString(body, "source"),
@@ -143,7 +147,12 @@ export class CustomersService {
           action: "customer.create",
           entityType: "customer",
           entityId: created.id,
-          after: { id: created.id, code: created.code, name: created.name },
+          after: {
+            id: created.id,
+            code: created.code,
+            name: created.name,
+            fullName: created.fullName,
+          },
         },
       });
 
@@ -162,6 +171,8 @@ export class CustomersService {
       data: {
         code: optionalString(body, "code") ?? before.code,
         name: optionalString(body, "name") ?? before.name,
+        fullName:
+          optionalString(body, "fullName") ?? before.fullName ?? before.name,
         status: this.status(body, before.status),
         industry: optionalString(body, "industry") ?? before.industry,
         source: optionalString(body, "source") ?? before.source,
@@ -176,8 +187,18 @@ export class CustomersService {
       action: "customer.update",
       entityType: "customer",
       entityId: id,
-      before: { code: before.code, name: before.name, status: before.status },
-      after: { code: updated.code, name: updated.name, status: updated.status },
+      before: {
+        code: before.code,
+        name: before.name,
+        fullName: before.fullName,
+        status: before.status,
+      },
+      after: {
+        code: updated.code,
+        name: updated.name,
+        fullName: updated.fullName,
+        status: updated.status,
+      },
     });
 
     return updated;
@@ -343,7 +364,8 @@ export class CustomersService {
         headers: ["字段", "说明"],
         rows: [
           { 字段: "客户编码", 说明: "必填，同一组织内唯一。" },
-          { 字段: "客户名称", 说明: "必填，客户正式名称。" },
+          { 字段: "客户简称", 说明: "必填，用于列表和业务页面快速识别。" },
+          { 字段: "客户全称", 说明: "必填，客户工商或合同正式名称。" },
           {
             字段: "状态",
             说明: "可选：ACTIVE/PAUSED/TERMINATED，或 正常/暂停/终止。",
@@ -540,7 +562,13 @@ export class CustomersService {
 
     return {
       code: this.cell(row, ["客户编码", "code", "Code"]),
-      name: this.cell(row, ["客户名称", "name", "Name"]),
+      name: this.cell(row, ["客户简称", "客户名称", "name", "Name"]),
+      fullName: this.cell(row, [
+        "客户全称",
+        "客户名称",
+        "fullName",
+        "Full Name",
+      ]),
       status: this.customerStatusFromCell(this.cell(row, ["状态", "status"])),
       industry: this.cell(row, ["行业", "industry"]),
       source: this.cell(row, ["来源", "source"]),

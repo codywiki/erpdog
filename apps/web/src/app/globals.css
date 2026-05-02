@@ -259,6 +259,12 @@ label {
   font-size: 13px;
 }
 
+.panel-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
 .metric-grid {
   display: grid;
   gap: 12px;
@@ -387,6 +393,14 @@ label {
   overflow-x: auto;
 }
 
+.inline-notice {
+  background: #fff8e8;
+  border-bottom: 1px solid #ead8a9;
+  color: var(--amber);
+  font-size: 13px;
+  padding: 10px 16px;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;
@@ -428,6 +442,46 @@ tr[data-selected="true"] {
   padding: 4px 8px;
 }
 
+.modal-backdrop {
+  align-items: center;
+  background: rgba(24, 32, 29, 0.38);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 22px;
+  position: fixed;
+  z-index: 20;
+}
+
+.modal-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 70px rgba(24, 32, 29, 0.22);
+  max-width: 520px;
+  overflow: hidden;
+  width: min(100%, 520px);
+}
+
+.icon-button {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 20px;
+  height: 34px;
+  justify-content: center;
+  line-height: 1;
+  min-height: 34px;
+  padding: 0;
+  width: 34px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 @media (max-width: 1180px) {
   .metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -463,9 +517,14 @@ tr[data-selected="true"] {
   }
 
   .topbar,
-  .mode-banner {
+  .mode-banner,
+  .panel-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .panel-actions {
+    align-items: stretch;
   }
 
   .mode-banner strong {

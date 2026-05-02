@@ -29,13 +29,15 @@ async function main() {
       },
     },
     update: {
-      name: "上海清流派科技有限公司",
+      name: "清流派科技",
+      fullName: "上海清流派科技有限公司",
       status: "ACTIVE",
     },
     create: {
       orgId: org.id,
       code: "DEMO-001",
-      name: "上海清流派科技有限公司",
+      name: "清流派科技",
+      fullName: "上海清流派科技有限公司",
       status: "ACTIVE",
       industry: "长期服务",
       notes: "预览演示客户",

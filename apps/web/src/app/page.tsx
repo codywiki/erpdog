@@ -20,6 +20,7 @@ type Customer = {
   id: string;
   code: string;
   name: string;
+  fullName?: string | null;
   status: string;
 };
 
@@ -309,13 +310,15 @@ function createDemoData(periodMonth: string): ConsoleData {
   const customerA: Customer = {
     id: "demo-customer-qingliu",
     code: "CUST-001",
-    name: "上海清流派科技有限公司",
+    name: "清流派科技",
+    fullName: "上海清流派科技有限公司",
     status: "ACTIVE",
   };
   const customerB: Customer = {
     id: "demo-customer-yunhe",
     code: "CUST-002",
-    name: "杭州云河供应链有限公司",
+    name: "云河供应链",
+    fullName: "杭州云河供应链有限公司",
     status: "ACTIVE",
   };
   const contractA: Contract = {
@@ -506,7 +509,12 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [periodMonth, setPeriodMonth] = useState("2026-04");
   const [customerCode, setCustomerCode] = useState(defaultCustomerCode);
-  const [customerName, setCustomerName] = useState("示例客户");
+  const [customerName, setCustomerName] = useState("");
+  const [customerFullName, setCustomerFullName] = useState("");
+  const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(
+    null,
+  );
   const [contractCode, setContractCode] = useState(defaultContractCode);
   const [contractFee, setContractFee] = useState("10000.00");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -520,6 +528,9 @@ export default function Home() {
   const selectedBill = bills.find((bill) => bill.id === selectedBillId);
   const selectedCustomer = customers.find(
     (customer) => customer.id === selectedCustomerId,
+  );
+  const editingCustomer = customers.find(
+    (customer) => customer.id === editingCustomerId,
   );
   const activeModule = modules.find((module) => module.id === active)!;
   const isLoggedIn = Boolean(token && user && !demoMode);
@@ -855,11 +866,7 @@ export default function Home() {
 
   function summarizeAction(label: string, result: unknown) {
     const summary = result as ActionSummary | undefined;
-    if (
-      label === "生成月度账单" &&
-      summary &&
-      typeof summary === "object"
-    ) {
+    if (label === "生成月度账单" && summary && typeof summary === "object") {
       if (summary.failed) {
         const firstError = summary.results?.find((item) => item.error)?.error;
         return `${label}失败：${translateErrorMessage(firstError ?? "存在失败合同")}`;
@@ -907,25 +914,78 @@ export default function Home() {
     }
   }
 
-  function createCustomer(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!customerCode.trim() || !customerName.trim()) {
-      setMessage("创建客户失败：客户编码和客户名称不能为空。");
+  function resetCustomerForm() {
+    setCustomerCode(defaultCustomerCode());
+    setCustomerName("");
+    setCustomerFullName("");
+    setEditingCustomerId(null);
+  }
+
+  function openCreateCustomerDialog() {
+    const blockedReason = actionBlockReason("customer.write");
+    if (blockedReason) {
+      setMessage(`新增客户失败：${blockedReason}`);
       return;
     }
 
-    void submitAction("创建客户", ["customer.write"], async () => {
-      const result = await request("/customers", {
-        method: "POST",
-        body: JSON.stringify({
+    resetCustomerForm();
+    setCustomerDialogOpen(true);
+  }
+
+  function openEditCustomerDialog(customer: Customer) {
+    const blockedReason = actionBlockReason("customer.write");
+    if (blockedReason) {
+      setMessage(`编辑客户失败：${blockedReason}`);
+      return;
+    }
+
+    setSelectedCustomerId(customer.id);
+    setEditingCustomerId(customer.id);
+    setCustomerCode(customer.code);
+    setCustomerName(customer.name);
+    setCustomerFullName(customer.fullName ?? customer.name);
+    setCustomerDialogOpen(true);
+  }
+
+  function closeCustomerDialog() {
+    setCustomerDialogOpen(false);
+    setEditingCustomerId(null);
+  }
+
+  function createCustomer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !customerCode.trim() ||
+      !customerName.trim() ||
+      !customerFullName.trim()
+    ) {
+      setMessage("保存客户失败：客户编码、客户简称和客户全称不能为空。");
+      return;
+    }
+
+    const isEditing = Boolean(editingCustomerId);
+    void submitAction(
+      isEditing ? "修改客户" : "创建客户",
+      ["customer.write"],
+      async () => {
+        const payload = {
           code: customerCode,
           name: customerName,
-          status: "ACTIVE",
-        }),
-      });
-      setCustomerCode(defaultCustomerCode());
-      return result;
-    });
+          fullName: customerFullName,
+          status: editingCustomer?.status ?? "ACTIVE",
+        };
+        const result = await request(
+          isEditing ? `/customers/${editingCustomerId}` : "/customers",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            body: JSON.stringify(payload),
+          },
+        );
+        setCustomerDialogOpen(false);
+        resetCustomerForm();
+        return result;
+      },
+    );
   }
 
   function createConsoleUser(event: FormEvent<HTMLFormElement>) {
@@ -1262,13 +1322,20 @@ export default function Home() {
 
         {active === "customers" ? (
           <CustomersModule
+            closeCustomerDialog={closeCustomerDialog}
             createCustomer={createCustomer}
             customerCode={customerCode}
+            customerDialogOpen={customerDialogOpen}
+            customerFullName={customerFullName}
             customerName={customerName}
             customers={customers}
             disabledReason={actionBlockReason("customer.write")}
+            editingCustomer={editingCustomer}
+            openCreateCustomerDialog={openCreateCustomerDialog}
+            openEditCustomerDialog={openEditCustomerDialog}
             selectedCustomerId={selectedCustomerId}
             setCustomerCode={setCustomerCode}
+            setCustomerFullName={setCustomerFullName}
             setCustomerName={setCustomerName}
             setSelectedCustomerId={setSelectedCustomerId}
           />
@@ -1638,68 +1705,67 @@ function IdentityModule({
 }
 
 function CustomersModule({
+  closeCustomerDialog,
   createCustomer,
   customerCode,
+  customerDialogOpen,
+  customerFullName,
   customerName,
   customers,
   disabledReason,
+  editingCustomer,
+  openCreateCustomerDialog,
+  openEditCustomerDialog,
   selectedCustomerId,
   setCustomerCode,
+  setCustomerFullName,
   setCustomerName,
   setSelectedCustomerId,
 }: {
+  closeCustomerDialog: () => void;
   createCustomer: (event: FormEvent<HTMLFormElement>) => void;
   customerCode: string;
+  customerDialogOpen: boolean;
+  customerFullName: string;
   customerName: string;
   customers: Customer[];
   disabledReason: string;
+  editingCustomer?: Customer;
+  openCreateCustomerDialog: () => void;
+  openEditCustomerDialog: (customer: Customer) => void;
   selectedCustomerId: string;
   setCustomerCode: (value: string) => void;
+  setCustomerFullName: (value: string) => void;
   setCustomerName: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
 }) {
   return (
-    <section className="workspace two-column">
-      <div className="panel">
-        <div className="panel-header">
-          <h2>新建客户</h2>
-          <span>档案入口</span>
-        </div>
-        <form className="module-form" onSubmit={createCustomer}>
-          <label>
-            客户编码
-            <input
-              onChange={(event) => setCustomerCode(event.target.value)}
-              value={customerCode}
-            />
-          </label>
-          <label>
-            客户名称
-            <input
-              onChange={(event) => setCustomerName(event.target.value)}
-              value={customerName}
-            />
-          </label>
-          {disabledReason ? (
-            <small className="form-note">{disabledReason}</small>
-          ) : null}
+    <section className="workspace">
+      <TablePanel
+        action={
           <button
             className="primary"
             disabled={Boolean(disabledReason)}
-            type="submit"
+            onClick={openCreateCustomerDialog}
+            type="button"
           >
-            创建客户
+            新增客户
           </button>
-        </form>
-      </div>
-
-      <TablePanel title="客户列表" count={`${customers.length} 个`}>
+        }
+        count={`${customers.length} 个`}
+        title="客户列表"
+      >
+        {disabledReason ? (
+          <div className="inline-notice">{disabledReason}</div>
+        ) : null}
         <table>
           <thead>
             <tr>
-              <th>编码</th>
-              <th>客户</th>
+              <th>客户编码</th>
+              <th>客户简称</th>
+              <th>客户全称</th>
               <th>状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -1711,14 +1777,96 @@ function CustomersModule({
               >
                 <td>{customer.code}</td>
                 <td>{customer.name}</td>
+                <td className="wrap-cell">
+                  {customer.fullName ?? customer.name}
+                </td>
                 <td>
                   <span className="status">{customer.status}</span>
+                </td>
+                <td>
+                  <button
+                    disabled={Boolean(disabledReason)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openEditCustomerDialog(customer);
+                    }}
+                    type="button"
+                  >
+                    编辑
+                  </button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </TablePanel>
+
+      {customerDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeCustomerDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>{editingCustomer ? "编辑客户" : "新增客户"}</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeCustomerDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={createCustomer}>
+              <label>
+                客户编码
+                <input
+                  onChange={(event) => setCustomerCode(event.target.value)}
+                  placeholder="例如 CUST-202605"
+                  value={customerCode}
+                />
+              </label>
+              <label>
+                客户简称
+                <input
+                  onChange={(event) => setCustomerName(event.target.value)}
+                  placeholder="用于列表和业务单据快速识别"
+                  value={customerName}
+                />
+              </label>
+              <label>
+                客户全称
+                <input
+                  onChange={(event) => setCustomerFullName(event.target.value)}
+                  placeholder="工商注册名或合同主体全称"
+                  value={customerFullName}
+                />
+              </label>
+              {disabledReason ? (
+                <small className="form-note">{disabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeCustomerDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(disabledReason)}
+                  type="submit"
+                >
+                  {editingCustomer ? "保存修改" : "创建客户"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2284,10 +2432,12 @@ function ProfitTable({ profits }: { profits: ProfitRow[] }) {
 }
 
 function TablePanel({
+  action,
   children,
   count,
   title,
 }: {
+  action?: React.ReactNode;
   children: React.ReactNode;
   count: string;
   title: string;
@@ -2296,7 +2446,10 @@ function TablePanel({
     <div className="panel table-panel">
       <div className="panel-header">
         <h2>{title}</h2>
-        <span>{count}</span>
+        <div className="panel-actions">
+          <span>{count}</span>
+          {action}
+        </div>
       </div>
       {children}
     </div>
