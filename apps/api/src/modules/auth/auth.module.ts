@@ -41,6 +41,6 @@ function parseTtlSeconds(value: string): number {
   ],
   controllers: [AuthController],
   providers: [AuthService, PasswordService],
-  exports: [AuthService, JwtModule],
+  exports: [AuthService, JwtModule, PasswordService],
 })
 export class AuthModule {}

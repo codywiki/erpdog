@@ -81,6 +81,34 @@ type Payment = {
   payeeName: string;
 };
 
+type Role = {
+  id: string;
+  code: string;
+  name: string;
+  permissions?: Array<{ permission: { code: string; name: string } }>;
+};
+
+type ConsoleUser = {
+  id: string;
+  email: string;
+  name: string;
+  isActive: boolean;
+  roles: Role[];
+};
+
+type AuditLog = {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  reason?: string | null;
+  createdAt: string;
+  actor?: {
+    name: string;
+    email: string;
+  } | null;
+};
+
 type ProfitRow = {
   customerName: string;
   incomeAmount: string;
@@ -99,6 +127,9 @@ type ConsoleData = {
   payables: Payable[];
   paymentRequests: PaymentRequest[];
   payments: Payment[];
+  users: ConsoleUser[];
+  roles: Role[];
+  auditLogs: AuditLog[];
   profits: ProfitRow[];
 };
 
@@ -125,6 +156,7 @@ const apiBase =
 const modules = [
   { id: "dashboard", label: "经营总览", title: "经营驾驶舱" },
   { id: "activation", label: "正式启用", title: "正式启用路径" },
+  { id: "identity", label: "用户权限", title: "用户、角色与审计" },
   { id: "customers", label: "客户", title: "客户管理" },
   { id: "contracts", label: "合同", title: "合同管理" },
   { id: "billing", label: "账单", title: "账单中心" },
@@ -155,6 +187,10 @@ function money(value: string | number | undefined) {
 
 function listItems<T>(value: T[] | PaginatedResponse<T>) {
   return Array.isArray(value) ? value : value.items;
+}
+
+function emptyPage<T>(): PaginatedResponse<T> {
+  return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 0 };
 }
 
 function dateText(value: string | undefined | null) {
@@ -297,6 +333,55 @@ function createDemoData(periodMonth: string): ConsoleData {
       },
     ],
     payments: [],
+    users: [
+      {
+        id: "demo-user-admin",
+        email: "admin@erpdog.local",
+        name: "Demo Admin",
+        isActive: true,
+        roles: [{ id: "demo-role-admin", code: "admin", name: "管理员" }],
+      },
+      {
+        id: "demo-user-owner",
+        email: "owner@erpdog.local",
+        name: "业务负责人",
+        isActive: true,
+        roles: [
+          {
+            id: "demo-role-customer-manager",
+            code: "customer_manager",
+            name: "客户负责人",
+          },
+        ],
+      },
+    ],
+    roles: [
+      { id: "demo-role-admin", code: "admin", name: "管理员" },
+      { id: "demo-role-finance", code: "finance", name: "财务" },
+      {
+        id: "demo-role-customer-manager",
+        code: "customer_manager",
+        name: "客户负责人",
+      },
+    ],
+    auditLogs: [
+      {
+        id: "demo-audit-bill",
+        action: "bill.customer_confirm",
+        entityType: "bill",
+        entityId: billA.id,
+        createdAt: `${periodMonth}-28T10:00:00.000Z`,
+        actor: { name: "Demo Admin", email: "admin@erpdog.local" },
+      },
+      {
+        id: "demo-audit-payment-request",
+        action: "payment_request.create",
+        entityType: "payment_request",
+        entityId: "demo-payment-request-ops",
+        createdAt: `${periodMonth}-29T10:00:00.000Z`,
+        actor: { name: "业务负责人", email: "owner@erpdog.local" },
+      },
+    ],
     profits: [
       {
         customerName: customerA.name,
@@ -331,6 +416,9 @@ export default function Home() {
   const [payables, setPayables] = useState<Payable[]>([]);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [users, setUsers] = useState<ConsoleUser[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [profits, setProfits] = useState<ProfitRow[]>([]);
   const [email, setEmail] = useState("admin@erpdog.local");
   const [password, setPassword] = useState("ChangeMe123!");
@@ -342,6 +430,10 @@ export default function Home() {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
   const [selectedBillId, setSelectedBillId] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("manager@erpdog.local");
+  const [newUserName, setNewUserName] = useState("客户负责人");
+  const [newUserPassword, setNewUserPassword] = useState("ChangeMe123!");
+  const [newUserRoleCode, setNewUserRoleCode] = useState("customer_manager");
 
   const selectedBill = bills.find((bill) => bill.id === selectedBillId);
   const selectedCustomer = customers.find(
@@ -424,6 +516,9 @@ export default function Home() {
     setPayables(data.payables);
     setPaymentRequests(data.paymentRequests);
     setPayments(data.payments);
+    setUsers(data.users);
+    setRoles(data.roles);
+    setAuditLogs(data.auditLogs);
     setProfits(data.profits);
     setSelectedCustomerId((current) =>
       data.customers.some((customer) => customer.id === current)
@@ -439,6 +534,11 @@ export default function Home() {
       data.bills.some((bill) => bill.id === current)
         ? current
         : (data.bills[0]?.id ?? ""),
+    );
+    setNewUserRoleCode((current) =>
+      data.roles.some((role) => role.code === current)
+        ? current
+        : (data.roles[0]?.code ?? "customer_manager"),
     );
   }
 
@@ -471,7 +571,7 @@ export default function Home() {
     return (await response.json()) as T;
   }
 
-  async function refresh(nextToken = token) {
+  async function refresh(nextToken = token, nextUser = user) {
     if (demoMode || nextToken === demoToken) {
       enterDemoMode(periodMonth);
       return;
@@ -483,6 +583,10 @@ export default function Home() {
     }
 
     const authHeader = { Authorization: `Bearer ${nextToken}` };
+    const can = (...permissions: string[]) =>
+      nextUser?.permissions.some((permission) =>
+        permissions.includes(permission),
+      ) ?? false;
     const fetchJson = async <TValue,>(path: string): Promise<TValue> => {
       const response = await fetch(`${apiBase}${path}`, {
         headers: authHeader,
@@ -493,6 +597,11 @@ export default function Home() {
 
       return (await response.json()) as TValue;
     };
+    const fetchIf = async <TValue,>(
+      allowed: boolean,
+      path: string,
+      fallback: TValue,
+    ) => (allowed ? fetchJson<TValue>(path) : fallback);
 
     const [
       nextCustomers,
@@ -504,37 +613,71 @@ export default function Home() {
       nextPayables,
       nextRequests,
       nextPayments,
+      nextUsers,
+      nextRoles,
+      nextAuditLogs,
       nextProfits,
     ] = await Promise.all([
-      fetchJson<Customer[] | PaginatedResponse<Customer>>(
+      fetchIf<Customer[] | PaginatedResponse<Customer>>(
+        can("customer.read_all", "customer.read_own"),
         "/customers?pageSize=50",
+        emptyPage<Customer>(),
       ),
-      fetchJson<Contract[] | PaginatedResponse<Contract>>(
+      fetchIf<Contract[] | PaginatedResponse<Contract>>(
+        can("customer.read_all", "customer.read_own"),
         "/contracts?pageSize=50",
+        emptyPage<Contract>(),
       ),
-      fetchJson<Bill[] | PaginatedResponse<Bill>>(
+      fetchIf<Bill[] | PaginatedResponse<Bill>>(
+        can("customer.read_all", "customer.read_own", "bill.manage"),
         `/bills?periodMonth=${periodMonth}&pageSize=50`,
+        emptyPage<Bill>(),
       ),
-      fetchJson<Invoice[] | PaginatedResponse<Invoice>>(
+      fetchIf<Invoice[] | PaginatedResponse<Invoice>>(
+        can("invoice.manage"),
         "/invoices?pageSize=50",
+        emptyPage<Invoice>(),
       ),
-      fetchJson<Receipt[] | PaginatedResponse<Receipt>>(
+      fetchIf<Receipt[] | PaginatedResponse<Receipt>>(
+        can("receipt.manage"),
         "/receipts?pageSize=50",
+        emptyPage<Receipt>(),
       ),
-      fetchJson<CostEntry[] | PaginatedResponse<CostEntry>>(
+      fetchIf<CostEntry[] | PaginatedResponse<CostEntry>>(
+        can("cost.manage"),
         `/cost-entries?periodMonth=${periodMonth}&pageSize=50`,
+        emptyPage<CostEntry>(),
       ),
-      fetchJson<Payable[] | PaginatedResponse<Payable>>(
+      fetchIf<Payable[] | PaginatedResponse<Payable>>(
+        can("cost.manage", "payment.pay"),
         "/payables?pageSize=50",
+        emptyPage<Payable>(),
       ),
-      fetchJson<PaymentRequest[] | PaginatedResponse<PaymentRequest>>(
+      fetchIf<PaymentRequest[] | PaginatedResponse<PaymentRequest>>(
+        can("payment_request.create", "payment_request.approve", "payment.pay"),
         "/payment-requests?pageSize=50",
+        emptyPage<PaymentRequest>(),
       ),
-      fetchJson<Payment[] | PaginatedResponse<Payment>>(
+      fetchIf<Payment[] | PaginatedResponse<Payment>>(
+        can("payment.pay"),
         "/payments?pageSize=50",
+        emptyPage<Payment>(),
       ),
-      fetchJson<ProfitRow[]>(
+      fetchIf<ConsoleUser[] | PaginatedResponse<ConsoleUser>>(
+        can("user.manage"),
+        "/identity/users?pageSize=50",
+        emptyPage<ConsoleUser>(),
+      ),
+      fetchIf<Role[]>(can("user.manage"), "/identity/roles", []),
+      fetchIf<AuditLog[] | PaginatedResponse<AuditLog>>(
+        can("audit.view"),
+        "/audit-logs?pageSize=30",
+        emptyPage<AuditLog>(),
+      ),
+      fetchIf<ProfitRow[]>(
+        can("report.view"),
         `/reports/customer-profit?periodMonth=${periodMonth}`,
+        [],
       ),
     ]);
 
@@ -548,6 +691,9 @@ export default function Home() {
       payables: listItems(nextPayables),
       paymentRequests: listItems(nextRequests),
       payments: listItems(nextPayments),
+      users: listItems(nextUsers),
+      roles: nextRoles,
+      auditLogs: listItems(nextAuditLogs),
       profits: nextProfits,
     });
     setMessage("正式数据已刷新");
@@ -567,7 +713,7 @@ export default function Home() {
       setToken(result.accessToken);
       setUser(result.user);
       setMessage(`已登录：${result.user.name}`);
-      await refresh(result.accessToken);
+      await refresh(result.accessToken, result.user);
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -602,6 +748,21 @@ export default function Home() {
           code: customerCode,
           name: customerName,
           status: "ACTIVE",
+        }),
+      }),
+    );
+  }
+
+  function createConsoleUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void submitAction("创建用户", () =>
+      request("/identity/users", {
+        method: "POST",
+        body: JSON.stringify({
+          email: newUserEmail,
+          name: newUserName,
+          password: newUserPassword,
+          roleCodes: [newUserRoleCode],
         }),
       }),
     );
@@ -873,6 +1034,23 @@ export default function Home() {
           <ActivationModule apiBase={apiBase} demoMode={demoMode} />
         ) : null}
 
+        {active === "identity" ? (
+          <IdentityModule
+            auditLogs={auditLogs}
+            createConsoleUser={createConsoleUser}
+            newUserEmail={newUserEmail}
+            newUserName={newUserName}
+            newUserPassword={newUserPassword}
+            newUserRoleCode={newUserRoleCode}
+            roles={roles}
+            setNewUserEmail={setNewUserEmail}
+            setNewUserName={setNewUserName}
+            setNewUserPassword={setNewUserPassword}
+            setNewUserRoleCode={setNewUserRoleCode}
+            users={users}
+          />
+        ) : null}
+
         {active === "customers" ? (
           <CustomersModule
             createCustomer={createCustomer}
@@ -1075,6 +1253,163 @@ function ActivationModule({
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+function IdentityModule({
+  auditLogs,
+  createConsoleUser,
+  newUserEmail,
+  newUserName,
+  newUserPassword,
+  newUserRoleCode,
+  roles,
+  setNewUserEmail,
+  setNewUserName,
+  setNewUserPassword,
+  setNewUserRoleCode,
+  users,
+}: {
+  auditLogs: AuditLog[];
+  createConsoleUser: (event: FormEvent<HTMLFormElement>) => void;
+  newUserEmail: string;
+  newUserName: string;
+  newUserPassword: string;
+  newUserRoleCode: string;
+  roles: Role[];
+  setNewUserEmail: (value: string) => void;
+  setNewUserName: (value: string) => void;
+  setNewUserPassword: (value: string) => void;
+  setNewUserRoleCode: (value: string) => void;
+  users: ConsoleUser[];
+}) {
+  return (
+    <section className="workspace two-column">
+      <div className="panel">
+        <div className="panel-header">
+          <h2>新建内部用户</h2>
+          <span>正式启用必做</span>
+        </div>
+        <form className="module-form" onSubmit={createConsoleUser}>
+          <label>
+            邮箱
+            <input
+              onChange={(event) => setNewUserEmail(event.target.value)}
+              value={newUserEmail}
+            />
+          </label>
+          <label>
+            姓名
+            <input
+              onChange={(event) => setNewUserName(event.target.value)}
+              value={newUserName}
+            />
+          </label>
+          <label>
+            初始密码
+            <input
+              onChange={(event) => setNewUserPassword(event.target.value)}
+              type="password"
+              value={newUserPassword}
+            />
+          </label>
+          <label>
+            角色
+            <select
+              onChange={(event) => setNewUserRoleCode(event.target.value)}
+              value={newUserRoleCode}
+            >
+              {roles.map((role) => (
+                <option key={role.id} value={role.code}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="primary" type="submit">
+            创建用户
+          </button>
+        </form>
+      </div>
+
+      <TablePanel title="内部用户" count={`${users.length} 个`}>
+        <table>
+          <thead>
+            <tr>
+              <th>姓名</th>
+              <th>邮箱</th>
+              <th>角色</th>
+              <th>状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((item) => (
+              <tr key={item.id}>
+                <td>{item.name}</td>
+                <td>{item.email}</td>
+                <td>{item.roles.map((role) => role.name).join("、")}</td>
+                <td>
+                  <span className="status">
+                    {item.isActive ? "启用" : "停用"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TablePanel>
+
+      <TablePanel title="角色权限" count={`${roles.length} 个角色`}>
+        <table>
+          <thead>
+            <tr>
+              <th>角色</th>
+              <th>编码</th>
+              <th>权限</th>
+            </tr>
+          </thead>
+          <tbody>
+            {roles.map((role) => (
+              <tr key={role.id}>
+                <td>{role.name}</td>
+                <td>{role.code}</td>
+                <td className="wrap-cell">
+                  {role.permissions
+                    ?.map((item) => item.permission.name)
+                    .join("、") ?? "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TablePanel>
+
+      <TablePanel title="最近审计" count={`${auditLogs.length} 条`}>
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>操作</th>
+              <th>对象</th>
+              <th>操作者</th>
+            </tr>
+          </thead>
+          <tbody>
+            {auditLogs.map((log) => (
+              <tr key={log.id}>
+                <td>{dateText(log.createdAt)}</td>
+                <td>{log.action}</td>
+                <td>
+                  {log.entityType}
+                  {log.entityId ? ` / ${log.entityId.slice(0, 8)}` : ""}
+                </td>
+                <td>{log.actor?.name ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TablePanel>
     </section>
   );
 }

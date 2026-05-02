@@ -387,6 +387,12 @@ td {
   white-space: nowrap;
 }
 
+td.wrap-cell {
+  line-height: 1.5;
+  max-width: 520px;
+  white-space: normal;
+}
+
 th {
   color: var(--muted);
   font-weight: 600;

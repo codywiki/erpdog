@@ -239,6 +239,16 @@ export class FinanceController {
     return this.finance.createPayment(user, body);
   }
 
+  @Post("payments/:id/reverse")
+  @RequirePermissions(PERMISSION_CODES.PAYMENT_PAY)
+  reversePayment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.finance.reversePayment(user, id, body);
+  }
+
   @Post("periods/:month/close")
   @RequirePermissions(PERMISSION_CODES.PERIOD_CLOSE)
   closePeriod(

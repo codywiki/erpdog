@@ -26,9 +26,17 @@ NEXT_PUBLIC_API_URL=https://api.example.com/api/v1
 1. Deploy infrastructure and run database migrations.
 2. Replace all production secrets, especially `JWT_SECRET` and `ADMIN_PASSWORD`.
 3. Run the seed script to create the first organization, roles, permissions, and administrator.
-4. Log in as administrator and create business users.
+4. Log in as administrator and create business users under 用户权限.
 5. Import or create customers and contracts.
 6. Verify one test billing period before using the system for real month-end work.
+
+## User and audit setup
+
+- Create named accounts for every internal user instead of sharing the administrator account.
+- Assign users to the closest built-in role: 管理员, 老板, 财务, or 客户负责人.
+- Keep at least one active administrator account at all times.
+- Review 最近审计 after configuration changes, payment approvals, period close, and period reopen.
+- Customer owners should only see their own customers; finance and administrators can see organization-wide finance data.
 
 ## Monthly workflow
 

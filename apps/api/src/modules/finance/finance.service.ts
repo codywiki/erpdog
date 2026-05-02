@@ -258,9 +258,24 @@ export class FinanceService {
   async voidInvoice(user: AuthenticatedUser, id: string) {
     const invoice = await this.prisma.invoice.findFirst({
       where: { id, orgId: user.orgId },
+      include: { allocations: { include: { bill: true } } },
     });
     if (!invoice) {
       throw new NotFoundException("Invoice not found.");
+    }
+    if (invoice.status === InvoiceStatus.VOIDED) {
+      throw new ConflictException("Invoice is already voided.");
+    }
+
+    for (const allocation of invoice.allocations) {
+      await this.customers.ensureCustomerAccess(
+        user,
+        allocation.bill.customerId,
+      );
+      await this.periodLocks.ensureOpen(
+        user.orgId,
+        allocation.bill.periodMonth,
+      );
     }
 
     const updated = await this.prisma.invoice.update({
@@ -369,10 +384,25 @@ export class FinanceService {
   async reverseReceipt(user: AuthenticatedUser, id: string) {
     const receipt = await this.prisma.receipt.findFirst({
       where: { id, orgId: user.orgId },
+      include: { allocations: { include: { bill: true } } },
     });
     if (!receipt) {
       throw new NotFoundException("Receipt not found.");
     }
+    if (receipt.status === ReceiptStatus.REVERSED) {
+      throw new ConflictException("Receipt is already reversed.");
+    }
+    for (const allocation of receipt.allocations) {
+      await this.customers.ensureCustomerAccess(
+        user,
+        allocation.bill.customerId,
+      );
+      await this.periodLocks.ensureOpen(
+        user.orgId,
+        allocation.bill.periodMonth,
+      );
+    }
+
     const updated = await this.prisma.receipt.update({
       where: { id },
       data: { status: ReceiptStatus.REVERSED },
@@ -512,6 +542,10 @@ export class FinanceService {
     paginationQuery: PaginationQuery = {},
   ) {
     const where: Prisma.PayableWhereInput = { orgId: user.orgId };
+    if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
+      where.customer = { owners: { some: { userId: user.id } } };
+    }
+
     const pagination = parsePagination(paginationQuery);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.payable.findMany({
@@ -571,11 +605,29 @@ export class FinanceService {
     paginationQuery: PaginationQuery = {},
   ) {
     const where: Prisma.PaymentRequestWhereInput = { orgId: user.orgId };
+    if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
+      where.OR = [
+        { applicantUserId: user.id },
+        { customer: { owners: { some: { userId: user.id } } } },
+        {
+          items: {
+            some: {
+              payable: {
+                customer: { owners: { some: { userId: user.id } } },
+              },
+            },
+          },
+        },
+      ];
+    }
+
     const pagination = parsePagination(paginationQuery);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.paymentRequest.findMany({
         where,
         include: {
+          customer: true,
+          category: true,
           items: { include: { payable: true } },
           approvals: true,
           payments: true,
@@ -876,6 +928,66 @@ export class FinanceService {
     return payment;
   }
 
+  async reversePayment(user: AuthenticatedUser, id: string, rawBody: unknown) {
+    const body = bodyObject(rawBody);
+    const reason = stringField(body, "reason", "付款冲销");
+    const payment = await this.prisma.payment.findFirst({
+      where: { id, orgId: user.orgId },
+      include: { allocations: true },
+    });
+    if (!payment) {
+      throw new NotFoundException("Payment not found.");
+    }
+    if (payment.status === PaymentStatus.REVERSED) {
+      throw new ConflictException("Payment is already reversed.");
+    }
+
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+        for (const allocation of payment.allocations) {
+          if (allocation.payableId) {
+            await this.reversePayablePayment(
+              tx,
+              user,
+              allocation.payableId,
+              allocation.amount,
+            );
+          }
+        }
+
+        const reversed = await tx.payment.update({
+          where: { id },
+          data: { status: PaymentStatus.REVERSED },
+          include: { allocations: true },
+        });
+
+        if (payment.requestId) {
+          await this.refreshPaymentRequestStatus(tx, payment.requestId);
+        }
+
+        await tx.auditLog.create({
+          data: {
+            orgId: user.orgId,
+            actorUserId: user.id,
+            action: "payment.reverse",
+            entityType: "payment",
+            entityId: id,
+            before: { status: payment.status },
+            after: { status: reversed.status, reason },
+            reason,
+          },
+        });
+
+        return reversed;
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+
+    return updated;
+  }
+
   async closePeriod(
     user: AuthenticatedUser,
     periodMonth: string,
@@ -1172,6 +1284,24 @@ export class FinanceService {
       throw new NotFoundException("Payment request not found.");
     }
 
+    if (
+      status === PaymentRequestStatus.SUBMITTED &&
+      request.status !== PaymentRequestStatus.DRAFT
+    ) {
+      throw new ConflictException(
+        "Only draft payment requests can be submitted.",
+      );
+    }
+    if (
+      (status === PaymentRequestStatus.APPROVED ||
+        status === PaymentRequestStatus.REJECTED) &&
+      request.status !== PaymentRequestStatus.SUBMITTED
+    ) {
+      throw new ConflictException(
+        "Only submitted payment requests can be decided.",
+      );
+    }
+
     const updated = await this.prisma.paymentRequest.update({
       where: { id },
       data: {
@@ -1302,6 +1432,42 @@ export class FinanceService {
     });
   }
 
+  private async reversePayablePayment(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    payableId: string,
+    amount: Prisma.Decimal,
+  ) {
+    const payable = await tx.payable.findFirst({
+      where: { id: payableId, orgId: user.orgId },
+    });
+    if (!payable) {
+      throw new NotFoundException("Payable not found.");
+    }
+    if (payable.customerId) {
+      await this.customers.ensureCustomerAccess(user, payable.customerId);
+    }
+    if (payable.periodMonth) {
+      await this.periodLocks.ensureOpen(user.orgId, payable.periodMonth);
+    }
+
+    const paidAmount = payable.paidAmount.minus(amount);
+    if (paidAmount.lessThan(0)) {
+      throw new BadRequestException("Payment reversal exceeds paid amount.");
+    }
+
+    const status = paidAmount.greaterThanOrEqualTo(payable.amount)
+      ? PayableStatus.PAID
+      : paidAmount.isZero()
+        ? PayableStatus.UNPAID
+        : PayableStatus.PARTIALLY_PAID;
+
+    await tx.payable.update({
+      where: { id: payableId },
+      data: { paidAmount, status },
+    });
+  }
+
   private async ensurePayableRequestFits(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
@@ -1408,9 +1574,12 @@ export class FinanceService {
     );
     const status = paid.greaterThanOrEqualTo(request.requestedAmount)
       ? PaymentRequestStatus.PAID
-      : paid.isZero()
-        ? request.status
-        : PaymentRequestStatus.PARTIALLY_PAID;
+      : paid.greaterThan(0)
+        ? PaymentRequestStatus.PARTIALLY_PAID
+        : request.status === PaymentRequestStatus.PAID ||
+            request.status === PaymentRequestStatus.PARTIALLY_PAID
+          ? PaymentRequestStatus.APPROVED
+          : request.status;
 
     await tx.paymentRequest.update({
       where: { id: requestId },
