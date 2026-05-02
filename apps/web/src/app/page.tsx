@@ -8,6 +8,14 @@ type ApiUser = {
   permissions: string[];
 };
 
+type ActionSummary = {
+  created?: number;
+  skipped?: number;
+  failed?: number;
+  totalContracts?: number;
+  results?: Array<{ billId?: string; skipped?: boolean; error?: string }>;
+};
+
 type Customer = {
   id: string;
   code: string;
@@ -150,11 +158,64 @@ const demoUser: ApiUser = {
 };
 
 const authExpiredMessage = "登录已过期，请重新登录。";
+const loginRequiredMessage = "请先登录正式系统。";
+
+const permissionLabels: Record<string, string> = {
+  "user.manage": "用户管理",
+  "customer.write": "客户维护",
+  "contract.write": "合同维护",
+  "bill.manage": "账单管理",
+};
 
 const configuredApiBase = process.env.NEXT_PUBLIC_API_URL?.trim();
 const apiBase = configuredApiBase
   ? configuredApiBase.replace(/\/$/, "")
   : "/api/v1";
+
+function uniqueSuffix() {
+  return Date.now().toString(36).toUpperCase();
+}
+
+function defaultCustomerCode() {
+  return `CUST-${uniqueSuffix()}`;
+}
+
+function defaultContractCode() {
+  return `CTR-${uniqueSuffix()}`;
+}
+
+function defaultManagerEmail() {
+  return `manager-${uniqueSuffix().toLowerCase()}@erpdog.local`;
+}
+
+function translateErrorMessage(message: string) {
+  if (/Missing bearer token|Invalid or expired bearer token/i.test(message)) {
+    return authExpiredMessage;
+  }
+  if (/You do not have permission/i.test(message)) {
+    return "当前账号没有权限执行此操作。";
+  }
+  if (/Unique constraint failed|already exists/i.test(message)) {
+    return "编码或邮箱已存在，请换一个。";
+  }
+  if (/customerId is required/i.test(message)) {
+    return "请先选择客户。";
+  }
+  if (/roleCodes is required|One or more roles are invalid/i.test(message)) {
+    return "请选择有效角色。";
+  }
+  if (/password must be at least/i.test(message)) {
+    return "初始密码至少需要 10 位。";
+  }
+  if (/must be a valid decimal|must be finite/i.test(message)) {
+    return "金额格式不正确。";
+  }
+  if (/must be a valid date/i.test(message)) {
+    return "日期格式不正确。";
+  }
+
+  return message;
+}
 
 const modules = [
   { id: "dashboard", label: "经营总览", title: "经营驾驶舱" },
@@ -444,14 +505,14 @@ export default function Home() {
   const [email, setEmail] = useState("admin@erpdog.local");
   const [password, setPassword] = useState("");
   const [periodMonth, setPeriodMonth] = useState("2026-04");
-  const [customerCode, setCustomerCode] = useState("CUST-001");
+  const [customerCode, setCustomerCode] = useState(defaultCustomerCode);
   const [customerName, setCustomerName] = useState("示例客户");
-  const [contractCode, setContractCode] = useState("CTR-001");
+  const [contractCode, setContractCode] = useState(defaultContractCode);
   const [contractFee, setContractFee] = useState("10000.00");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
   const [selectedBillId, setSelectedBillId] = useState("");
-  const [newUserEmail, setNewUserEmail] = useState("manager@erpdog.local");
+  const [newUserEmail, setNewUserEmail] = useState(defaultManagerEmail);
   const [newUserName, setNewUserName] = useState("客户负责人");
   const [newUserPassword, setNewUserPassword] = useState("ChangeMe123!");
   const [newUserRoleCode, setNewUserRoleCode] = useState("customer_manager");
@@ -461,7 +522,26 @@ export default function Home() {
     (customer) => customer.id === selectedCustomerId,
   );
   const activeModule = modules.find((module) => module.id === active)!;
+  const isLoggedIn = Boolean(token && user && !demoMode);
+  const hasPermission = (...permissions: string[]) =>
+    permissions.length === 0 ||
+    (user?.permissions.some((permission) => permissions.includes(permission)) ??
+      false);
+  const actionBlockReason = (...permissions: string[]) => {
+    if (demoMode) {
+      return "";
+    }
+    if (!isLoggedIn) {
+      return loginRequiredMessage;
+    }
+    if (!hasPermission(...permissions)) {
+      return `当前账号缺少${permissions
+        .map((permission) => permissionLabels[permission] ?? permission)
+        .join("、")}权限。`;
+    }
 
+    return "";
+  };
   const metrics = useMemo(() => {
     const income = bills.reduce(
       (total, bill) => total + Number(bill.totalAmount ?? 0),
@@ -605,7 +685,7 @@ export default function Home() {
         throw new Error(authExpiredMessage);
       }
 
-      throw new Error(message);
+      throw new Error(translateErrorMessage(message));
     }
 
     return (await response.json()) as T;
@@ -638,7 +718,7 @@ export default function Home() {
           throw new Error(authExpiredMessage);
         }
 
-        throw new Error(message);
+        throw new Error(translateErrorMessage(message));
       }
 
       return (await response.json()) as TValue;
@@ -767,46 +847,100 @@ export default function Home() {
     } catch (error) {
       setMessage(
         error instanceof Error
-          ? `登录失败：${error.message}`
+          ? `登录失败：${translateErrorMessage(error.message)}`
           : "登录失败，请检查后端服务",
       );
     }
   }
 
-  async function submitAction(label: string, action: () => Promise<unknown>) {
+  function summarizeAction(label: string, result: unknown) {
+    const summary = result as ActionSummary | undefined;
+    if (
+      label === "生成月度账单" &&
+      summary &&
+      typeof summary === "object"
+    ) {
+      if (summary.failed) {
+        const firstError = summary.results?.find((item) => item.error)?.error;
+        return `${label}失败：${translateErrorMessage(firstError ?? "存在失败合同")}`;
+      }
+      if (!summary.created && !summary.skipped) {
+        return "生成月度账单未产生账单：当前账期没有可计费的 ACTIVE 合同。";
+      }
+      if (!summary.created && summary.skipped) {
+        return "生成月度账单未产生新账单：当前账期账单已存在。";
+      }
+
+      return `${label}完成：新增 ${summary.created ?? 0} 张账单`;
+    }
+
+    return `${label}完成`;
+  }
+
+  async function submitAction(
+    label: string,
+    permissions: string[],
+    action: () => Promise<unknown>,
+  ) {
     try {
+      const blockedReason = actionBlockReason(...permissions);
+      if (blockedReason) {
+        setMessage(`${label}失败：${blockedReason}`);
+        return;
+      }
+
       setMessage(`${label}处理中`);
       if (demoMode) {
         setMessage(`${label}：演示模式仅展示流程，正式模式会写入后端`);
         return;
       }
 
-      await action();
+      const result = await action();
       await refresh();
-      setMessage(`${label}完成`);
+      setMessage(summarizeAction(label, result));
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `${label}失败`);
+      setMessage(
+        error instanceof Error
+          ? `${label}失败：${translateErrorMessage(error.message)}`
+          : `${label}失败`,
+      );
     }
   }
 
   function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void submitAction("创建客户", () =>
-      request("/customers", {
+    if (!customerCode.trim() || !customerName.trim()) {
+      setMessage("创建客户失败：客户编码和客户名称不能为空。");
+      return;
+    }
+
+    void submitAction("创建客户", ["customer.write"], async () => {
+      const result = await request("/customers", {
         method: "POST",
         body: JSON.stringify({
           code: customerCode,
           name: customerName,
           status: "ACTIVE",
         }),
-      }),
-    );
+      });
+      setCustomerCode(defaultCustomerCode());
+      return result;
+    });
   }
 
   function createConsoleUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void submitAction("创建用户", () =>
-      request("/identity/users", {
+    if (!newUserEmail.trim() || !newUserName.trim()) {
+      setMessage("创建用户失败：邮箱和姓名不能为空。");
+      return;
+    }
+    if (!newUserRoleCode) {
+      setMessage("创建用户失败：请选择有效角色。");
+      return;
+    }
+
+    void submitAction("创建用户", ["user.manage"], async () => {
+      const result = await request("/identity/users", {
         method: "POST",
         body: JSON.stringify({
           email: newUserEmail,
@@ -814,14 +948,29 @@ export default function Home() {
           password: newUserPassword,
           roleCodes: [newUserRoleCode],
         }),
-      }),
-    );
+      });
+      setNewUserEmail(defaultManagerEmail());
+      return result;
+    });
   }
 
   function createContract(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void submitAction("创建合同", () =>
-      request("/contracts", {
+    if (!selectedCustomerId) {
+      setMessage("创建合同失败：请先选择客户。");
+      return;
+    }
+    if (!contractCode.trim()) {
+      setMessage("创建合同失败：合同编码不能为空。");
+      return;
+    }
+    if (!Number.isFinite(Number(contractFee)) || Number(contractFee) <= 0) {
+      setMessage("创建合同失败：基础月费必须大于 0。");
+      return;
+    }
+
+    void submitAction("创建合同", ["contract.write"], async () => {
+      const result = await request("/contracts", {
         method: "POST",
         body: JSON.stringify({
           customerId: selectedCustomerId,
@@ -837,12 +986,19 @@ export default function Home() {
             },
           ],
         }),
-      }),
-    );
+      });
+      setContractCode(defaultContractCode());
+      return result;
+    });
   }
 
   function runBilling() {
-    void submitAction("生成月度账单", () =>
+    if (!contracts.some((contract) => contract.status === "ACTIVE")) {
+      setMessage("生成月度账单失败：当前没有可计费的 ACTIVE 合同。");
+      return;
+    }
+
+    void submitAction("生成月度账单", ["bill.manage"], () =>
       request("/billing-runs", {
         method: "POST",
         body: JSON.stringify({ periodMonth }),
@@ -856,7 +1012,7 @@ export default function Home() {
       return;
     }
 
-    void submitAction(label, () =>
+    void submitAction(label, ["bill.manage"], () =>
       request(`/bills/${selectedBillId}/${path}`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -871,7 +1027,7 @@ export default function Home() {
       return;
     }
 
-    void submitAction("登记发票", () =>
+    void submitAction("登记发票", ["invoice.manage"], () =>
       request("/invoices", {
         method: "POST",
         body: JSON.stringify({
@@ -896,7 +1052,7 @@ export default function Home() {
       return;
     }
 
-    void submitAction("登记收款", () =>
+    void submitAction("登记收款", ["receipt.manage"], () =>
       request("/receipts", {
         method: "POST",
         body: JSON.stringify({
@@ -920,7 +1076,7 @@ export default function Home() {
       return;
     }
 
-    void submitAction("登记成本", () =>
+    void submitAction("登记成本", ["cost.manage"], () =>
       request("/cost-entries", {
         method: "POST",
         body: JSON.stringify({
@@ -938,7 +1094,7 @@ export default function Home() {
 
   function createPaymentRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void submitAction("发起付款申请", () =>
+    void submitAction("发起付款申请", ["payment_request.create"], () =>
       request("/payment-requests", {
         method: "POST",
         body: JSON.stringify({
@@ -962,7 +1118,7 @@ export default function Home() {
 
   function closePeriod(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void submitAction("关闭账期", () =>
+    void submitAction("关闭账期", ["period.close"], () =>
       request(`/periods/${periodMonth}/close`, {
         method: "POST",
         body: JSON.stringify({ reason: "月度结账" }),
@@ -1090,6 +1246,7 @@ export default function Home() {
           <IdentityModule
             auditLogs={auditLogs}
             createConsoleUser={createConsoleUser}
+            disabledReason={actionBlockReason("user.manage")}
             newUserEmail={newUserEmail}
             newUserName={newUserName}
             newUserPassword={newUserPassword}
@@ -1109,6 +1266,7 @@ export default function Home() {
             customerCode={customerCode}
             customerName={customerName}
             customers={customers}
+            disabledReason={actionBlockReason("customer.write")}
             selectedCustomerId={selectedCustomerId}
             setCustomerCode={setCustomerCode}
             setCustomerName={setCustomerName}
@@ -1123,6 +1281,7 @@ export default function Home() {
             contracts={contracts}
             createContract={createContract}
             customers={customers}
+            disabledReason={actionBlockReason("contract.write")}
             selectedCustomerId={selectedCustomerId}
             selectedContractId={selectedContractId}
             setContractCode={setContractCode}
@@ -1135,6 +1294,7 @@ export default function Home() {
         {active === "billing" ? (
           <BillingModule
             bills={bills}
+            disabledReason={actionBlockReason("bill.manage")}
             runBilling={runBilling}
             selectedBillId={selectedBillId}
             setSelectedBillId={setSelectedBillId}
@@ -1175,7 +1335,7 @@ export default function Home() {
             periodMonth={periodMonth}
             profits={profits}
             reopenPeriod={() =>
-              void submitAction("解锁账期", () =>
+              void submitAction("解锁账期", ["period.reopen"], () =>
                 request(`/periods/${periodMonth}/reopen`, {
                   method: "POST",
                   body: JSON.stringify({ reason: "管理员解锁" }),
@@ -1314,6 +1474,7 @@ function ActivationModule({
 function IdentityModule({
   auditLogs,
   createConsoleUser,
+  disabledReason,
   newUserEmail,
   newUserName,
   newUserPassword,
@@ -1327,6 +1488,7 @@ function IdentityModule({
 }: {
   auditLogs: AuditLog[];
   createConsoleUser: (event: FormEvent<HTMLFormElement>) => void;
+  disabledReason: string;
   newUserEmail: string;
   newUserName: string;
   newUserPassword: string;
@@ -1381,7 +1543,14 @@ function IdentityModule({
               ))}
             </select>
           </label>
-          <button className="primary" type="submit">
+          {disabledReason ? (
+            <small className="form-note">{disabledReason}</small>
+          ) : null}
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            type="submit"
+          >
             创建用户
           </button>
         </form>
@@ -1473,6 +1642,7 @@ function CustomersModule({
   customerCode,
   customerName,
   customers,
+  disabledReason,
   selectedCustomerId,
   setCustomerCode,
   setCustomerName,
@@ -1482,6 +1652,7 @@ function CustomersModule({
   customerCode: string;
   customerName: string;
   customers: Customer[];
+  disabledReason: string;
   selectedCustomerId: string;
   setCustomerCode: (value: string) => void;
   setCustomerName: (value: string) => void;
@@ -1509,7 +1680,14 @@ function CustomersModule({
               value={customerName}
             />
           </label>
-          <button className="primary" type="submit">
+          {disabledReason ? (
+            <small className="form-note">{disabledReason}</small>
+          ) : null}
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            type="submit"
+          >
             创建客户
           </button>
         </form>
@@ -1551,6 +1729,7 @@ function ContractsModule({
   contracts,
   createContract,
   customers,
+  disabledReason,
   selectedCustomerId,
   selectedContractId,
   setContractCode,
@@ -1563,6 +1742,7 @@ function ContractsModule({
   contracts: Contract[];
   createContract: (event: FormEvent<HTMLFormElement>) => void;
   customers: Customer[];
+  disabledReason: string;
   selectedCustomerId: string;
   selectedContractId: string;
   setContractCode: (value: string) => void;
@@ -1606,7 +1786,14 @@ function ContractsModule({
               value={contractFee}
             />
           </label>
-          <button className="primary" type="submit">
+          {disabledReason ? (
+            <small className="form-note">{disabledReason}</small>
+          ) : null}
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            type="submit"
+          >
             创建合同
           </button>
         </form>
@@ -1646,12 +1833,14 @@ function ContractsModule({
 
 function BillingModule({
   bills,
+  disabledReason,
   runBilling,
   selectedBillId,
   setSelectedBillId,
   transitionBill,
 }: {
   bills: Bill[];
+  disabledReason: string;
   runBilling: () => void;
   selectedBillId: string;
   setSelectedBillId: (value: string) => void;
@@ -1665,28 +1854,37 @@ function BillingModule({
           <span>生成到确认</span>
         </div>
         <div className="action-strip">
-          <button className="primary" onClick={runBilling} type="button">
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            onClick={runBilling}
+            type="button"
+          >
             生成本月账单
           </button>
           <button
+            disabled={Boolean(disabledReason)}
             onClick={() => transitionBill("submit", "提交内部审核")}
             type="button"
           >
             提交内部审核
           </button>
           <button
+            disabled={Boolean(disabledReason)}
             onClick={() => transitionBill("finance-review", "提交财务审核")}
             type="button"
           >
             财务审核
           </button>
           <button
+            disabled={Boolean(disabledReason)}
             onClick={() => transitionBill("send-to-customer", "发送客户确认")}
             type="button"
           >
             发给客户
           </button>
           <button
+            disabled={Boolean(disabledReason)}
             onClick={() =>
               transitionBill("confirm-customer", "客户确认", {
                 confirmedByName: "客户联系人",
@@ -1696,6 +1894,9 @@ function BillingModule({
           >
             客户确认
           </button>
+          {disabledReason ? (
+            <small className="form-note">{disabledReason}</small>
+          ) : null}
         </div>
       </div>
 

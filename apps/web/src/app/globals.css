@@ -45,6 +45,15 @@ button:hover {
   border-color: var(--accent);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button:disabled:hover {
+  border-color: var(--line);
+}
+
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -285,6 +294,11 @@ label {
 
 .module-form button {
   justify-self: start;
+}
+
+.form-note {
+  color: var(--amber);
+  line-height: 1.5;
 }
 
 .helper-text {
