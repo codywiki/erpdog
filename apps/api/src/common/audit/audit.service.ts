@@ -28,8 +28,8 @@ export class AuditService {
         entityId: input.entityId,
         before: input.before ?? Prisma.JsonNull,
         after: input.after ?? Prisma.JsonNull,
-        reason: input.reason
-      }
+        reason: input.reason,
+      },
     });
   }
 }

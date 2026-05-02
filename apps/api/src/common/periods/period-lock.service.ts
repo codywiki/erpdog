@@ -1,4 +1,8 @@
-import { ConflictException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from "@nestjs/common";
 
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -9,7 +13,7 @@ export function parsePeriodMonth(periodMonth: string): {
   const match = /^(?<year>\d{4})-(?<month>0[1-9]|1[0-2])$/.exec(periodMonth);
 
   if (!match?.groups) {
-    throw new ConflictException("periodMonth must use YYYY-MM format.");
+    throw new BadRequestException("periodMonth must use YYYY-MM format.");
   }
 
   const year = Number(match.groups.year);
@@ -25,7 +29,7 @@ export function previousPeriodMonth(now = new Date()): string {
   const month = now.getUTCMonth();
   const previous = new Date(Date.UTC(year, month - 1, 1));
   return `${previous.getUTCFullYear()}-${String(
-    previous.getUTCMonth() + 1
+    previous.getUTCMonth() + 1,
   ).padStart(2, "0")}`;
 }
 
@@ -40,16 +44,16 @@ export class PeriodLockService {
       where: {
         orgId_periodMonth: {
           orgId,
-          periodMonth
-        }
+          periodMonth,
+        },
       },
       update: {},
       create: {
         orgId,
         periodMonth,
         startsOn,
-        endsOn
-      }
+        endsOn,
+      },
     });
   }
 

@@ -21,7 +21,7 @@ import { IdentityModule } from "./modules/identity/identity.module";
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      validate: parseServerEnv
+      validate: parseServerEnv,
     }),
     PrismaModule,
     AuditModule,
@@ -32,17 +32,17 @@ import { IdentityModule } from "./modules/identity/identity.module";
     CustomersModule,
     ContractsModule,
     BillingModule,
-    FinanceModule
+    FinanceModule,
   ],
   providers: [
     {
       provide: APP_GUARD,
-      useClass: JwtAuthGuard
+      useClass: JwtAuthGuard,
     },
     {
       provide: APP_GUARD,
-      useClass: PermissionsGuard
-    }
-  ]
+      useClass: PermissionsGuard,
+    },
+  ],
 })
 export class AppModule {}

@@ -6,29 +6,31 @@ import {
   ExtraChargeStatus,
   PaymentRequestStatus,
   Prisma,
-  PrismaClient
+  PrismaClient,
 } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 async function main() {
   const org = await prisma.organization.findUniqueOrThrow({
-    where: { code: "default" }
+    where: { code: "default" },
   });
   const admin = await prisma.user.findUniqueOrThrow({
-    where: { email: (process.env.ADMIN_EMAIL ?? "admin@erpdog.local").toLowerCase() }
+    where: {
+      email: (process.env.ADMIN_EMAIL ?? "admin@erpdog.local").toLowerCase(),
+    },
   });
 
   const customer = await prisma.customer.upsert({
     where: {
       orgId_code: {
         orgId: org.id,
-        code: "DEMO-001"
-      }
+        code: "DEMO-001",
+      },
     },
     update: {
       name: "上海清流派科技有限公司",
-      status: "ACTIVE"
+      status: "ACTIVE",
     },
     create: {
       orgId: org.id,
@@ -40,8 +42,8 @@ async function main() {
       owners: {
         create: {
           userId: admin.id,
-          isPrimary: true
-        }
+          isPrimary: true,
+        },
       },
       contacts: {
         create: {
@@ -49,8 +51,8 @@ async function main() {
           title: "运营负责人",
           phone: "13800000000",
           email: "demo@example.com",
-          isPrimary: true
-        }
+          isPrimary: true,
+        },
       },
       billingProfiles: {
         create: {
@@ -58,22 +60,22 @@ async function main() {
           taxNumber: "91310000DEMO00001",
           bankName: "招商银行上海分行",
           bankAccount: "6222000000000000000",
-          isDefault: true
-        }
-      }
-    }
+          isDefault: true,
+        },
+      },
+    },
   });
 
   const contract = await prisma.contract.upsert({
     where: {
       orgId_code: {
         orgId: org.id,
-        code: "DEMO-CTR-001"
-      }
+        code: "DEMO-CTR-001",
+      },
     },
     update: {
       status: ContractStatus.ACTIVE,
-      name: "年度运营服务合同"
+      name: "年度运营服务合同",
     },
     create: {
       orgId: org.id,
@@ -89,24 +91,24 @@ async function main() {
             name: "基础服务费",
             kind: "FIXED",
             amount: new Prisma.Decimal("12000.00"),
-            quantity: new Prisma.Decimal("1")
+            quantity: new Prisma.Decimal("1"),
           },
           {
             name: "专属客服席位",
             kind: "FIXED",
             amount: new Prisma.Decimal("1800.00"),
-            quantity: new Prisma.Decimal("2")
-          }
-        ]
-      }
-    }
+            quantity: new Prisma.Decimal("2"),
+          },
+        ],
+      },
+    },
   });
 
   const extraCategory = await prisma.extraChargeCategory.findFirst({
     where: {
       orgId: org.id,
-      kind: ExtraChargeKind.VALUE_ADDED
-    }
+      kind: ExtraChargeKind.VALUE_ADDED,
+    },
   });
 
   await prisma.extraCharge.upsert({
@@ -124,8 +126,8 @@ async function main() {
       incurredDate: new Date("2026-04-18T00:00:00.000Z"),
       periodMonth: "2026-04",
       status: ExtraChargeStatus.BILLING_INCLUDED,
-      description: "演示增值服务"
-    }
+      description: "演示增值服务",
+    },
   });
 
   const bill = await prisma.bill.upsert({
@@ -133,8 +135,8 @@ async function main() {
       orgId_contractId_periodMonth: {
         orgId: org.id,
         contractId: contract.id,
-        periodMonth: "2026-04"
-      }
+        periodMonth: "2026-04",
+      },
     },
     update: {},
     create: {
@@ -156,14 +158,14 @@ async function main() {
             name: "基础服务费",
             amount: new Prisma.Decimal("12000.00"),
             quantity: new Prisma.Decimal("1"),
-            lineTotal: new Prisma.Decimal("12000.00")
+            lineTotal: new Prisma.Decimal("12000.00"),
           },
           {
             sourceType: ChargeSourceType.CONTRACT,
             name: "专属客服席位",
             amount: new Prisma.Decimal("1800.00"),
             quantity: new Prisma.Decimal("2"),
-            lineTotal: new Prisma.Decimal("3600.00")
+            lineTotal: new Prisma.Decimal("3600.00"),
           },
           {
             extraChargeId: "demo-extra-charge-001",
@@ -171,23 +173,23 @@ async function main() {
             name: "临时专项支持",
             amount: new Prisma.Decimal("2600.00"),
             quantity: new Prisma.Decimal("1"),
-            lineTotal: new Prisma.Decimal("2600.00")
-          }
-        ]
+            lineTotal: new Prisma.Decimal("2600.00"),
+          },
+        ],
       },
       confirmations: {
         create: {
           confirmedByName: "王经理",
-          note: "演示客户确认"
-        }
+          note: "演示客户确认",
+        },
       },
       statusEvents: {
         create: {
           toStatus: BillStatus.CUSTOMER_CONFIRMED,
-          note: "Demo seed"
-        }
-      }
-    }
+          note: "Demo seed",
+        },
+      },
+    },
   });
 
   await prisma.receipt.upsert({
@@ -204,17 +206,17 @@ async function main() {
       allocations: {
         create: {
           billId: bill.id,
-          amount: new Prisma.Decimal("10000.00")
-        }
-      }
-    }
+          amount: new Prisma.Decimal("10000.00"),
+        },
+      },
+    },
   });
 
   const costCategory = await prisma.costCategory.findFirst({
     where: {
       orgId: org.id,
-      code: "outsourcing"
-    }
+      code: "outsourcing",
+    },
   });
 
   const cost = await prisma.costEntry.upsert({
@@ -230,8 +232,8 @@ async function main() {
       incurredDate: new Date("2026-04-22T00:00:00.000Z"),
       handlerUserId: admin.id,
       description: "外包服务成本",
-      payableCreated: true
-    }
+      payableCreated: true,
+    },
   });
 
   const payable = await prisma.payable.upsert({
@@ -246,16 +248,16 @@ async function main() {
       vendorName: "示例外包供应商",
       periodMonth: "2026-04",
       amount: new Prisma.Decimal("5200.00"),
-      dueDate: new Date("2026-05-10T00:00:00.000Z")
-    }
+      dueDate: new Date("2026-05-10T00:00:00.000Z"),
+    },
   });
 
   await prisma.paymentRequest.upsert({
     where: {
       orgId_requestNo: {
         orgId: org.id,
-        requestNo: "PAYREQ-DEMO-001"
-      }
+        requestNo: "PAYREQ-DEMO-001",
+      },
     },
     update: {},
     create: {
@@ -278,10 +280,10 @@ async function main() {
           periodMonth: "2026-04",
           categoryId: costCategory?.id,
           amount: new Prisma.Decimal("5200.00"),
-          description: "外包服务成本"
-        }
-      }
-    }
+          description: "外包服务成本",
+        },
+      },
+    },
   });
 
   console.info("Seeded erpdog demo data for 2026-04.");

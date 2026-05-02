@@ -1,0 +1,14 @@
+node_modules/
+.pnpm-store/
+.turbo/
+.next/
+dist/
+coverage/
+*.log
+*.tsbuildinfo
+apps/web/.next/
+apps/web/out/
+apps/api/dist/
+apps/worker/dist/
+packages/*/dist/
+pnpm-lock.yaml

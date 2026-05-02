@@ -17,8 +17,7 @@ export class HealthController {
     return {
       status: "ok",
       service: "erpdog-api",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
   }
 }
-

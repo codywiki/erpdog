@@ -21,14 +21,14 @@ const permissionNames: Record<string, string> = {
   [PERMISSION_CODES.PERIOD_CLOSE]: "月度结账",
   [PERMISSION_CODES.PERIOD_REOPEN]: "解锁账期",
   [PERMISSION_CODES.REPORT_VIEW]: "查看报表",
-  [PERMISSION_CODES.AUDIT_VIEW]: "查看审计日志"
+  [PERMISSION_CODES.AUDIT_VIEW]: "查看审计日志",
 };
 
 const roleDefinitions = [
   {
     code: ROLE_CODES.ADMIN,
     name: "管理员",
-    permissions: Object.values(PERMISSION_CODES)
+    permissions: Object.values(PERMISSION_CODES),
   },
   {
     code: ROLE_CODES.OWNER,
@@ -38,8 +38,8 @@ const roleDefinitions = [
       PERMISSION_CODES.PAYMENT_REQUEST_APPROVE,
       PERMISSION_CODES.PERIOD_REOPEN,
       PERMISSION_CODES.REPORT_VIEW,
-      PERMISSION_CODES.AUDIT_VIEW
-    ]
+      PERMISSION_CODES.AUDIT_VIEW,
+    ],
   },
   {
     code: ROLE_CODES.FINANCE,
@@ -53,8 +53,8 @@ const roleDefinitions = [
       PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
       PERMISSION_CODES.PAYMENT_PAY,
       PERMISSION_CODES.PERIOD_CLOSE,
-      PERMISSION_CODES.REPORT_VIEW
-    ]
+      PERMISSION_CODES.REPORT_VIEW,
+    ],
   },
   {
     code: ROLE_CODES.CUSTOMER_MANAGER,
@@ -65,14 +65,18 @@ const roleDefinitions = [
       PERMISSION_CODES.CONTRACT_WRITE,
       PERMISSION_CODES.BILL_MANAGE,
       PERMISSION_CODES.COST_MANAGE,
-      PERMISSION_CODES.PAYMENT_REQUEST_CREATE
-    ]
-  }
+      PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+    ],
+  },
 ];
 
 const extraChargeCategories = [
   { code: "value-added", name: "增值服务", kind: ExtraChargeKind.VALUE_ADDED },
-  { code: "advance-payment", name: "代垫费用", kind: ExtraChargeKind.ADVANCE_PAYMENT }
+  {
+    code: "advance-payment",
+    name: "代垫费用",
+    kind: ExtraChargeKind.ADVANCE_PAYMENT,
+  },
 ];
 
 const costCategories = [
@@ -80,7 +84,7 @@ const costCategories = [
   { code: "outsourcing", name: "外包服务" },
   { code: "advance-payment", name: "代垫支出" },
   { code: "software", name: "软件和工具" },
-  { code: "other", name: "其他成本" }
+  { code: "other", name: "其他成本" },
 ];
 
 async function main() {
@@ -89,20 +93,20 @@ async function main() {
     update: {},
     create: {
       code: "default",
-      name: "默认组织"
-    }
+      name: "默认组织",
+    },
   });
 
   for (const code of Object.values(PERMISSION_CODES)) {
     await prisma.permission.upsert({
       where: { code },
       update: {
-        name: permissionNames[code] ?? code
+        name: permissionNames[code] ?? code,
       },
       create: {
         code,
-        name: permissionNames[code] ?? code
-      }
+        name: permissionNames[code] ?? code,
+      },
     });
   }
 
@@ -111,38 +115,38 @@ async function main() {
       where: {
         orgId_code: {
           orgId: org.id,
-          code: roleDefinition.code
-        }
+          code: roleDefinition.code,
+        },
       },
       update: {
         name: roleDefinition.name,
-        isSystem: true
+        isSystem: true,
       },
       create: {
         orgId: org.id,
         code: roleDefinition.code,
         name: roleDefinition.name,
-        isSystem: true
-      }
+        isSystem: true,
+      },
     });
 
     for (const permissionCode of roleDefinition.permissions) {
       const permission = await prisma.permission.findUniqueOrThrow({
-        where: { code: permissionCode }
+        where: { code: permissionCode },
       });
 
       await prisma.rolePermission.upsert({
         where: {
           roleId_permissionId: {
             roleId: role.id,
-            permissionId: permission.id
-          }
+            permissionId: permission.id,
+          },
         },
         update: {},
         create: {
           roleId: role.id,
-          permissionId: permission.id
-        }
+          permissionId: permission.id,
+        },
       });
     }
   }
@@ -159,38 +163,38 @@ async function main() {
     update: {
       name: adminName,
       passwordHash,
-      isActive: true
+      isActive: true,
     },
     create: {
       orgId: org.id,
       email: adminEmail,
       name: adminName,
       passwordHash,
-      isActive: true
-    }
+      isActive: true,
+    },
   });
 
   const adminRole = await prisma.role.findUniqueOrThrow({
     where: {
       orgId_code: {
         orgId: org.id,
-        code: ROLE_CODES.ADMIN
-      }
-    }
+        code: ROLE_CODES.ADMIN,
+      },
+    },
   });
 
   await prisma.userRole.upsert({
     where: {
       userId_roleId: {
         userId: admin.id,
-        roleId: adminRole.id
-      }
+        roleId: adminRole.id,
+      },
     },
     update: {},
     create: {
       userId: admin.id,
-      roleId: adminRole.id
-    }
+      roleId: adminRole.id,
+    },
   });
 
   for (const category of extraChargeCategories) {
@@ -198,21 +202,21 @@ async function main() {
       where: {
         orgId_code: {
           orgId: org.id,
-          code: category.code
-        }
+          code: category.code,
+        },
       },
       update: {
         name: category.name,
         kind: category.kind,
-        isActive: true
+        isActive: true,
       },
       create: {
         orgId: org.id,
         code: category.code,
         name: category.name,
         kind: category.kind,
-        isActive: true
-      }
+        isActive: true,
+      },
     });
   }
 
@@ -221,19 +225,19 @@ async function main() {
       where: {
         orgId_code: {
           orgId: org.id,
-          code: category.code
-        }
+          code: category.code,
+        },
       },
       update: {
         name: category.name,
-        isActive: true
+        isActive: true,
       },
       create: {
         orgId: org.id,
         code: category.code,
         name: category.name,
-        isActive: true
-      }
+        isActive: true,
+      },
     });
   }
 

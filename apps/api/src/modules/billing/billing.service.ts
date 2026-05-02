@@ -2,35 +2,37 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  NotFoundException
+  NotFoundException,
 } from "@nestjs/common";
 import {
   BillStatus,
   ChargeSourceType,
   ContractStatus,
   ExtraChargeStatus,
-  Prisma
+  Prisma,
 } from "@prisma/client";
 
-import {
-  PERMISSION_CODES,
-  type AuthenticatedUser
-} from "@erpdog/contracts";
+import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
 import { AuditService } from "../../common/audit/audit.service";
 import {
   parsePeriodMonth,
   PeriodLockService,
-  previousPeriodMonth
+  previousPeriodMonth,
 } from "../../common/periods/period-lock.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import {
-  decimal,
   decimalString,
   lineTotal,
+  money,
   optionalDecimal,
-  sum
+  sum,
 } from "../../common/utils/finance";
+import {
+  paginated,
+  parsePagination,
+  type PaginationQuery,
+} from "../../common/utils/pagination";
 import {
   arrayField,
   bodyObject,
@@ -38,7 +40,7 @@ import {
   optionalDate,
   optionalString,
   stringField,
-  type Payload
+  type Payload,
 } from "../../common/utils/payload";
 import { CustomersService } from "../customers/customers.service";
 
@@ -46,7 +48,7 @@ type BillFilters = {
   periodMonth?: string;
   customerId?: string;
   status?: string;
-};
+} & PaginationQuery;
 
 type BillWithDetails = Prisma.BillGetPayload<{
   include: ReturnType<BillingService["billInclude"]>;
@@ -58,7 +60,7 @@ export class BillingService {
     private readonly audit: AuditService,
     private readonly customers: CustomersService,
     private readonly periodLocks: PeriodLockService,
-    private readonly prisma: PrismaService
+    private readonly prisma: PrismaService,
   ) {}
 
   async generateMonthlyBills(user: AuthenticatedUser, rawBody: unknown) {
@@ -73,14 +75,14 @@ export class BillingService {
         orgId: user.orgId,
         status: ContractStatus.ACTIVE,
         startDate: { lte: endsOn },
-        OR: [{ endDate: null }, { endDate: { gte: startsOn } }]
+        OR: [{ endDate: null }, { endDate: { gte: startsOn } }],
       },
       include: {
         chargeItems: {
-          where: { isActive: true }
+          where: { isActive: true },
         },
-        customer: true
-      }
+        customer: true,
+      },
     });
 
     const results: Array<{
@@ -97,13 +99,17 @@ export class BillingService {
             orgId_contractId_periodMonth: {
               orgId: user.orgId,
               contractId: contract.id,
-              periodMonth
-            }
-          }
+              periodMonth,
+            },
+          },
         });
 
         if (existing) {
-          results.push({ contractId: contract.id, billId: existing.id, skipped: true });
+          results.push({
+            contractId: contract.id,
+            billId: existing.id,
+            skipped: true,
+          });
           continue;
         }
 
@@ -114,8 +120,8 @@ export class BillingService {
               customerId: contract.customerId,
               periodMonth,
               status: ExtraChargeStatus.DRAFT,
-              OR: [{ contractId: null }, { contractId: contract.id }]
-            }
+              OR: [{ contractId: null }, { contractId: contract.id }],
+            },
           });
 
           const contractItems = contract.chargeItems
@@ -129,7 +135,7 @@ export class BillingService {
                 description: item.description,
                 amount: item.amount,
                 quantity: item.quantity,
-                lineTotal: total
+                lineTotal: total,
               };
             });
 
@@ -141,7 +147,7 @@ export class BillingService {
             amount: charge.amount,
             quantity: new Prisma.Decimal(1),
             lineTotal: charge.amount,
-            occurredDate: charge.incurredDate
+            occurredDate: charge.incurredDate,
           }));
 
           const items = [...contractItems, ...extraItems];
@@ -156,23 +162,29 @@ export class BillingService {
               periodMonth,
               subtotal,
               totalAmount: subtotal,
-              dueDate: new Date(Date.UTC(endsOn.getUTCFullYear(), endsOn.getUTCMonth(), endsOn.getUTCDate() + 15)),
+              dueDate: new Date(
+                Date.UTC(
+                  endsOn.getUTCFullYear(),
+                  endsOn.getUTCMonth(),
+                  endsOn.getUTCDate() + 15,
+                ),
+              ),
               items: { create: items },
               statusEvents: {
                 create: {
                   toStatus: BillStatus.DRAFT,
                   note: "Generated from active contract.",
-                  actorUserId: user.id
-                }
-              }
+                  actorUserId: user.id,
+                },
+              },
             },
-            include: this.billInclude()
+            include: this.billInclude(),
           });
 
           if (extraCharges.length) {
             await tx.extraCharge.updateMany({
               where: { id: { in: extraCharges.map((charge) => charge.id) } },
-              data: { status: ExtraChargeStatus.BILLING_INCLUDED }
+              data: { status: ExtraChargeStatus.BILLING_INCLUDED },
             });
           }
 
@@ -186,9 +198,9 @@ export class BillingService {
               after: {
                 billNo: created.billNo,
                 periodMonth,
-                totalAmount: created.totalAmount.toString()
-              }
-            }
+                totalAmount: created.totalAmount.toString(),
+              },
+            },
           });
 
           return created;
@@ -198,7 +210,7 @@ export class BillingService {
       } catch (error) {
         results.push({
           contractId: contract.id,
-          error: error instanceof Error ? error.message : "Unknown error"
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       }
     }
@@ -206,10 +218,11 @@ export class BillingService {
     return {
       periodMonth,
       totalContracts: contracts.length,
-      created: results.filter((result) => result.billId && !result.skipped).length,
+      created: results.filter((result) => result.billId && !result.skipped)
+        .length,
       skipped: results.filter((result) => result.skipped).length,
       failed: results.filter((result) => result.error).length,
-      results
+      results,
     };
   }
 
@@ -218,26 +231,36 @@ export class BillingService {
       orgId: user.orgId,
       ...(filters.periodMonth ? { periodMonth: filters.periodMonth } : {}),
       ...(filters.customerId ? { customerId: filters.customerId } : {}),
-      ...(filters.status ? { status: filters.status as BillStatus } : {})
+      ...(filters.status ? { status: filters.status as BillStatus } : {}),
     };
 
     if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
       where.customer = { owners: { some: { userId: user.id } } };
     }
 
-    const bills = await this.prisma.bill.findMany({
-      where,
-      include: this.billInclude(),
-      orderBy: [{ periodMonth: "desc" }, { createdAt: "desc" }]
-    });
+    const pagination = parsePagination(filters);
+    const [bills, total] = await this.prisma.$transaction([
+      this.prisma.bill.findMany({
+        where,
+        include: this.billInclude(),
+        orderBy: [{ periodMonth: "desc" }, { createdAt: "desc" }],
+        skip: pagination.skip,
+        take: pagination.take,
+      }),
+      this.prisma.bill.count({ where }),
+    ]);
 
-    return bills.map((bill) => this.presentBill(bill));
+    return paginated(
+      bills.map((bill) => this.presentBill(bill)),
+      total,
+      pagination,
+    );
   }
 
   async get(user: AuthenticatedUser, id: string) {
     const bill = await this.prisma.bill.findFirst({
       where: { id, orgId: user.orgId },
-      include: this.billInclude()
+      include: this.billInclude(),
     });
 
     if (!bill) {
@@ -254,6 +277,15 @@ export class BillingService {
     const periodMonth = stringField(body, "periodMonth");
     await this.customers.ensureCustomerAccess(user, customerId);
     await this.periodLocks.ensureOpen(user.orgId, periodMonth);
+    const contractId = optionalString(body, "contractId");
+    if (contractId) {
+      const contract = await this.prisma.contract.findFirst({
+        where: { id: contractId, orgId: user.orgId, customerId },
+      });
+      if (!contract) {
+        throw new NotFoundException("Contract not found for customer.");
+      }
+    }
 
     const rawItems = arrayField<Payload>(body, "items");
     if (!rawItems.length) {
@@ -261,7 +293,7 @@ export class BillingService {
     }
 
     const items = rawItems.map((item) => {
-      const amount = decimal(item.amount);
+      const amount = money(item.amount);
       const quantity = optionalDecimal(item.quantity, new Prisma.Decimal(1));
       return {
         sourceType: (optionalString(item, "sourceType") ??
@@ -271,16 +303,21 @@ export class BillingService {
         amount,
         quantity,
         lineTotal: lineTotal(amount, quantity),
-        occurredDate: optionalDate(item, "occurredDate")
+        occurredDate: optionalDate(item, "occurredDate"),
       };
     });
     const subtotal = sum(items.map((item) => item.lineTotal));
+    if (!subtotal.greaterThan(0)) {
+      throw new BadRequestException(
+        "Bill total amount must be greater than 0.",
+      );
+    }
 
     const bill = await this.prisma.bill.create({
       data: {
         orgId: user.orgId,
         customerId,
-        contractId: optionalString(body, "contractId"),
+        contractId,
         billNo:
           optionalString(body, "billNo") ??
           `BILL-${periodMonth}-${Date.now().toString(36).toUpperCase()}`,
@@ -293,11 +330,11 @@ export class BillingService {
           create: {
             toStatus: BillStatus.DRAFT,
             note: "Created manually.",
-            actorUserId: user.id
-          }
-        }
+            actorUserId: user.id,
+          },
+        },
       },
-      include: this.billInclude()
+      include: this.billInclude(),
     });
 
     await this.audit.log({
@@ -306,7 +343,7 @@ export class BillingService {
       action: "bill.create_manual",
       entityType: "bill",
       entityId: bill.id,
-      after: { billNo: bill.billNo, totalAmount: bill.totalAmount.toString() }
+      after: { billNo: bill.billNo, totalAmount: bill.totalAmount.toString() },
     });
 
     return this.presentBill(bill);
@@ -316,10 +353,10 @@ export class BillingService {
     user: AuthenticatedUser,
     billId: string,
     toStatus: BillStatus,
-    action: string
+    action: string,
   ) {
     const bill = await this.prisma.bill.findFirst({
-      where: { id: billId, orgId: user.orgId }
+      where: { id: billId, orgId: user.orgId },
     });
 
     if (!bill) {
@@ -338,11 +375,11 @@ export class BillingService {
           create: {
             fromStatus: bill.status,
             toStatus,
-            actorUserId: user.id
-          }
-        }
+            actorUserId: user.id,
+          },
+        },
       },
-      include: this.billInclude()
+      include: this.billInclude(),
     });
 
     await this.audit.log({
@@ -352,7 +389,7 @@ export class BillingService {
       entityType: "bill",
       entityId: billId,
       before: { status: bill.status },
-      after: { status: updated.status }
+      after: { status: updated.status },
     });
 
     return this.presentBill(updated);
@@ -361,11 +398,11 @@ export class BillingService {
   async confirmCustomer(
     user: AuthenticatedUser,
     billId: string,
-    rawBody: unknown
+    rawBody: unknown,
   ) {
     const body = bodyObject(rawBody);
     const bill = await this.prisma.bill.findFirst({
-      where: { id: billId, orgId: user.orgId }
+      where: { id: billId, orgId: user.orgId },
     });
 
     if (!bill) {
@@ -374,6 +411,7 @@ export class BillingService {
 
     await this.customers.ensureCustomerAccess(user, bill.customerId);
     await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
+    this.ensureTransitionAllowed(bill.status, BillStatus.CUSTOMER_CONFIRMED);
 
     const confirmedByName = stringField(body, "confirmedByName", user.name);
     const now = new Date();
@@ -389,19 +427,19 @@ export class BillingService {
             confirmedByName,
             confirmedAt: now,
             note: optionalString(body, "note"),
-            evidenceAttachmentId: optionalString(body, "evidenceAttachmentId")
-          }
+            evidenceAttachmentId: optionalString(body, "evidenceAttachmentId"),
+          },
         },
         statusEvents: {
           create: {
             fromStatus: bill.status,
             toStatus: BillStatus.CUSTOMER_CONFIRMED,
             note: optionalString(body, "note"),
-            actorUserId: user.id
-          }
-        }
+            actorUserId: user.id,
+          },
+        },
       },
-      include: this.billInclude()
+      include: this.billInclude(),
     });
 
     await this.audit.log({
@@ -411,7 +449,7 @@ export class BillingService {
       entityType: "bill",
       entityId: billId,
       before: { status: bill.status },
-      after: { status: updated.status, confirmedBy: confirmedByName }
+      after: { status: updated.status, confirmedBy: confirmedByName },
     });
 
     return this.presentBill(updated);
@@ -421,7 +459,7 @@ export class BillingService {
     const body = bodyObject(rawBody);
     const bill = await this.prisma.bill.findFirst({
       where: { id: billId, orgId: user.orgId },
-      include: { adjustments: true, items: true }
+      include: { adjustments: true, items: true },
     });
 
     if (!bill) {
@@ -431,67 +469,89 @@ export class BillingService {
     await this.customers.ensureCustomerAccess(user, bill.customerId);
     await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
 
-    if (bill.status === BillStatus.VOIDED || bill.status === BillStatus.CLOSED) {
+    if (
+      bill.status === BillStatus.VOIDED ||
+      bill.status === BillStatus.CLOSED
+    ) {
       throw new ConflictException("Closed or voided bills cannot be adjusted.");
     }
 
-    const amount = decimal(body.amount);
+    if (
+      bill.status !== BillStatus.CUSTOMER_CONFIRMED &&
+      bill.status !== BillStatus.ADJUSTED
+    ) {
+      throw new ConflictException("Only confirmed bills can be adjusted.");
+    }
+
+    const amount = money(body.amount);
     const reason = stringField(body, "reason");
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const adjustment = await tx.billAdjustment.create({
-        data: {
-          billId,
-          amount,
-          reason,
-          createdById: user.id
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+        const adjustment = await tx.billAdjustment.create({
+          data: {
+            billId,
+            amount,
+            reason,
+            createdById: user.id,
+          },
+        });
+
+        await tx.billItem.create({
+          data: {
+            billId,
+            adjustmentId: adjustment.id,
+            sourceType: ChargeSourceType.ADJUSTMENT,
+            name: stringField(body, "name", "账单调整"),
+            description: reason,
+            amount,
+            quantity: new Prisma.Decimal(1),
+            lineTotal: amount,
+          },
+        });
+
+        const items = await tx.billItem.findMany({ where: { billId } });
+        const subtotal = sum(
+          items
+            .filter((item) => item.sourceType !== ChargeSourceType.ADJUSTMENT)
+            .map((item) => item.lineTotal),
+        );
+        const adjustmentTotal = sum(
+          items
+            .filter((item) => item.sourceType === ChargeSourceType.ADJUSTMENT)
+            .map((item) => item.lineTotal),
+        );
+
+        const totalAmount = subtotal.plus(adjustmentTotal);
+        if (totalAmount.lessThan(0)) {
+          throw new BadRequestException(
+            "Bill total amount cannot be negative.",
+          );
         }
-      });
 
-      await tx.billItem.create({
-        data: {
-          billId,
-          adjustmentId: adjustment.id,
-          sourceType: ChargeSourceType.ADJUSTMENT,
-          name: stringField(body, "name", "账单调整"),
-          description: reason,
-          amount,
-          quantity: new Prisma.Decimal(1),
-          lineTotal: amount
-        }
-      });
-
-      const items = await tx.billItem.findMany({ where: { billId } });
-      const subtotal = sum(
-        items
-          .filter((item) => item.sourceType !== ChargeSourceType.ADJUSTMENT)
-          .map((item) => item.lineTotal)
-      );
-      const adjustmentTotal = sum(
-        items
-          .filter((item) => item.sourceType === ChargeSourceType.ADJUSTMENT)
-          .map((item) => item.lineTotal)
-      );
-
-      return tx.bill.update({
-        where: { id: billId },
-        data: {
-          status: BillStatus.ADJUSTED,
-          subtotal,
-          adjustmentTotal,
-          totalAmount: subtotal.plus(adjustmentTotal),
-          statusEvents: {
-            create: {
-              fromStatus: bill.status,
-              toStatus: BillStatus.ADJUSTED,
-              note: reason,
-              actorUserId: user.id
-            }
-          }
-        },
-        include: this.billInclude()
-      });
-    });
+        return tx.bill.update({
+          where: { id: billId },
+          data: {
+            status: BillStatus.ADJUSTED,
+            subtotal,
+            adjustmentTotal,
+            totalAmount,
+            statusEvents: {
+              create: {
+                fromStatus: bill.status,
+                toStatus: BillStatus.ADJUSTED,
+                note: reason,
+                actorUserId: user.id,
+              },
+            },
+          },
+          include: this.billInclude(),
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
 
     await this.audit.log({
       orgId: user.orgId,
@@ -499,7 +559,7 @@ export class BillingService {
       action: "bill.adjust",
       entityType: "bill",
       entityId: billId,
-      after: { amount: amount.toString(), reason }
+      after: { amount: amount.toString(), reason },
     });
 
     return this.presentBill(updated);
@@ -512,9 +572,13 @@ export class BillingService {
       FINANCE_REVIEW: [BillStatus.CUSTOMER_PENDING, BillStatus.VOIDED],
       CUSTOMER_PENDING: [BillStatus.CUSTOMER_CONFIRMED, BillStatus.VOIDED],
       CUSTOMER_CONFIRMED: [BillStatus.ADJUSTED, BillStatus.CLOSED],
-      ADJUSTED: [BillStatus.CUSTOMER_CONFIRMED, BillStatus.CLOSED, BillStatus.VOIDED],
+      ADJUSTED: [
+        BillStatus.CUSTOMER_CONFIRMED,
+        BillStatus.CLOSED,
+        BillStatus.VOIDED,
+      ],
       CLOSED: [],
-      VOIDED: []
+      VOIDED: [],
     };
 
     if (!allowed[from].includes(to)) {
@@ -525,21 +589,24 @@ export class BillingService {
   private itemActiveInPeriod(
     item: { startsAt: Date | null; endsAt: Date | null },
     startsOn: Date,
-    endsOn: Date
+    endsOn: Date,
   ) {
-    return (!item.startsAt || item.startsAt <= endsOn) && (!item.endsAt || item.endsAt >= startsOn);
+    return (
+      (!item.startsAt || item.startsAt <= endsOn) &&
+      (!item.endsAt || item.endsAt >= startsOn)
+    );
   }
 
   private presentBill(bill: BillWithDetails) {
     const invoiceAmount = sum(
       bill.invoiceAllocations
         .filter((allocation) => allocation.invoice.status !== "VOIDED")
-        .map((allocation) => allocation.amount)
+        .map((allocation) => allocation.amount),
     );
     const receiptAmount = sum(
       bill.receiptAllocations
         .filter((allocation) => allocation.receipt.status !== "REVERSED")
-        .map((allocation) => allocation.amount)
+        .map((allocation) => allocation.amount),
     );
     const total = new Prisma.Decimal(bill.totalAmount);
 
@@ -561,7 +628,7 @@ export class BillingService {
         ? "UNRECEIVED"
         : receiptAmount.greaterThanOrEqualTo(total)
           ? "FULLY_RECEIVED"
-          : "PARTIALLY_RECEIVED"
+          : "PARTIALLY_RECEIVED",
     };
   }
 
@@ -574,7 +641,7 @@ export class BillingService {
       adjustments: { orderBy: { createdAt: "desc" } },
       statusEvents: { orderBy: { createdAt: "asc" } },
       invoiceAllocations: { include: { invoice: true } },
-      receiptAllocations: { include: { receipt: true } }
+      receiptAllocations: { include: { receipt: true } },
     } satisfies Prisma.BillInclude;
   }
 }

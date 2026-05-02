@@ -19,7 +19,7 @@ function parseTtlSeconds(value: string): number {
     s: 1,
     m: 60,
     h: 60 * 60,
-    d: 60 * 60 * 24
+    d: 60 * 60 * 24,
   };
 
   return amount * multipliers[unit as keyof typeof multipliers];
@@ -32,13 +32,15 @@ function parseTtlSeconds(value: string): number {
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>("JWT_SECRET"),
         signOptions: {
-          expiresIn: parseTtlSeconds(config.get<string>("JWT_ACCESS_TTL", "15m"))
-        }
-      })
-    })
+          expiresIn: parseTtlSeconds(
+            config.get<string>("JWT_ACCESS_TTL", "15m"),
+          ),
+        },
+      }),
+    }),
   ],
   controllers: [AuthController],
   providers: [AuthService, PasswordService],
-  exports: [AuthService, JwtModule]
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

@@ -8,7 +8,7 @@ export type OutboxJobData = {
 
 export async function handleOutboxJob(job: Job<OutboxJobData>) {
   const event = await prisma.outboxEvent.findUnique({
-    where: { id: job.data.eventId }
+    where: { id: job.data.eventId },
   });
 
   if (!event || event.status === "sent") {
@@ -20,8 +20,8 @@ export async function handleOutboxJob(job: Job<OutboxJobData>) {
     data: {
       status: "processing",
       lockedAt: new Date(),
-      attempts: { increment: 1 }
-    }
+      attempts: { increment: 1 },
+    },
   });
 
   try {
@@ -33,8 +33,8 @@ export async function handleOutboxJob(job: Job<OutboxJobData>) {
       data: {
         status: "sent",
         processedAt: new Date(),
-        error: null
-      }
+        error: null,
+      },
     });
 
     return { delivered: true };
@@ -44,8 +44,8 @@ export async function handleOutboxJob(job: Job<OutboxJobData>) {
       data: {
         status: "failed",
         error: error instanceof Error ? error.message : "Unknown error",
-        nextRunAt: new Date(Date.now() + 60_000)
-      }
+        nextRunAt: new Date(Date.now() + 60_000),
+      },
     });
     throw error;
   }

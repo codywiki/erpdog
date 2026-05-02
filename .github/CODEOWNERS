@@ -1,0 +1,8 @@
+* @codywiki
+
+/apps/api/ @codywiki
+/apps/web/ @codywiki
+/apps/worker/ @codywiki
+/packages/ @codywiki
+/prisma/ @codywiki
+/.github/workflows/ @codywiki

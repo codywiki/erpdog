@@ -58,12 +58,20 @@ type ConsoleData = {
   paymentRequests: PaymentRequest[];
 };
 
+type PaginatedResponse<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+};
+
 const demoToken = "demo-token";
 
 const demoUser: ApiUser = {
   email: "demo@erpdog.local",
   name: "Demo Admin",
-  permissions: ["demo"]
+  permissions: ["demo"],
 };
 
 const apiBase =
@@ -77,14 +85,36 @@ const navItems = [
   "账单",
   "发票收款",
   "成本付款",
-  "锁账报表"
+  "锁账报表",
 ];
 
 function money(value: string | number | undefined) {
   return `¥${Number(value ?? 0).toLocaleString("zh-CN", {
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    maximumFractionDigits: 2,
   })}`;
+}
+
+function listItems<T>(value: T[] | PaginatedResponse<T>) {
+  return Array.isArray(value) ? value : value.items;
+}
+
+async function responseMessage(response: Response) {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    const body = (await response.json()) as {
+      message?: string | string[];
+      error?: string;
+    };
+    if (Array.isArray(body.message)) {
+      return body.message.join("；");
+    }
+    return body.message ?? body.error ?? response.statusText;
+  }
+
+  const text = await response.text();
+  return text || response.statusText;
 }
 
 function createDemoData(periodMonth: string): ConsoleData {
@@ -92,27 +122,27 @@ function createDemoData(periodMonth: string): ConsoleData {
     id: "demo-customer-qingliu",
     code: "CUST-001",
     name: "上海清流派科技有限公司",
-    status: "ACTIVE"
+    status: "ACTIVE",
   };
   const customerB: Customer = {
     id: "demo-customer-yunhe",
     code: "CUST-002",
     name: "杭州云河供应链有限公司",
-    status: "ACTIVE"
+    status: "ACTIVE",
   };
   const contractA: Contract = {
     id: "demo-contract-qingliu",
     code: "CTR-001",
     name: "清流派月度运营服务合同",
     status: "ACTIVE",
-    customer: customerA
+    customer: customerA,
   };
   const contractB: Contract = {
     id: "demo-contract-yunhe",
     code: "CTR-002",
     name: "云河供应链财务外包服务",
     status: "ACTIVE",
-    customer: customerB
+    customer: customerB,
   };
 
   return {
@@ -127,7 +157,7 @@ function createDemoData(periodMonth: string): ConsoleData {
         totalAmount: "18200.00",
         invoiceAmount: "0.00",
         receiptAmount: "10000.00",
-        customer: customerA
+        customer: customerA,
       },
       {
         id: "demo-bill-yunhe",
@@ -137,8 +167,8 @@ function createDemoData(periodMonth: string): ConsoleData {
         totalAmount: "12600.00",
         invoiceAmount: "12600.00",
         receiptAmount: "12600.00",
-        customer: customerB
-      }
+        customer: customerB,
+      },
     ],
     profits: [
       {
@@ -146,15 +176,15 @@ function createDemoData(periodMonth: string): ConsoleData {
         incomeAmount: "18200.00",
         costAmount: "4600.00",
         profitAmount: "13600.00",
-        grossMargin: "74.73%"
+        grossMargin: "74.73%",
       },
       {
         customerName: customerB.name,
         incomeAmount: "12600.00",
         costAmount: "3900.00",
         profitAmount: "8700.00",
-        grossMargin: "69.05%"
-      }
+        grossMargin: "69.05%",
+      },
     ],
     paymentRequests: [
       {
@@ -162,9 +192,9 @@ function createDemoData(periodMonth: string): ConsoleData {
         requestNo: `PR-${periodMonth}-DEMO-001`,
         status: "SUBMITTED",
         supplierName: "上海砺行服务有限公司",
-        requestedAmount: "4600.00"
-      }
-    ]
+        requestedAmount: "4600.00",
+      },
+    ],
   };
 }
 
@@ -194,16 +224,16 @@ export default function Home() {
     const receivable = bills.reduce(
       (total, bill) =>
         total + Number(bill.totalAmount ?? 0) - Number(bill.receiptAmount ?? 0),
-      0
+      0,
     );
     const uninvoiced = bills.reduce(
       (total, bill) =>
         total + Number(bill.totalAmount ?? 0) - Number(bill.invoiceAmount ?? 0),
-      0
+      0,
     );
     const profit = profits.reduce(
       (total, row) => total + Number(row.profitAmount ?? 0),
-      0
+      0,
     );
 
     return [
@@ -212,9 +242,15 @@ export default function Home() {
       { label: "未收金额", value: money(receivable) },
       { label: "未开票金额", value: money(uninvoiced) },
       { label: "付款申请", value: paymentRequests.length.toString() },
-      { label: "毛利", value: money(profit) }
+      { label: "毛利", value: money(profit) },
     ];
-  }, [bills, contracts.length, customers.length, paymentRequests.length, profits]);
+  }, [
+    bills,
+    contracts.length,
+    customers.length,
+    paymentRequests.length,
+    profits,
+  ]);
 
   function applyConsoleData(data: ConsoleData) {
     setCustomers(data.customers);
@@ -225,17 +261,17 @@ export default function Home() {
     setSelectedCustomerId((current) =>
       data.customers.some((customer) => customer.id === current)
         ? current
-        : data.customers[0]?.id ?? ""
+        : (data.customers[0]?.id ?? ""),
     );
     setSelectedContractId((current) =>
       data.contracts.some((contract) => contract.id === current)
         ? current
-        : data.contracts[0]?.id ?? ""
+        : (data.contracts[0]?.id ?? ""),
     );
     setSelectedBillId((current) =>
       data.bills.some((bill) => bill.id === current)
         ? current
-        : data.bills[0]?.id ?? ""
+        : (data.bills[0]?.id ?? ""),
     );
   }
 
@@ -257,13 +293,12 @@ export default function Home() {
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...init?.headers
-      }
+        ...init?.headers,
+      },
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || response.statusText);
+      throw new Error(await responseMessage(response));
     }
 
     return (await response.json()) as T;
@@ -281,31 +316,40 @@ export default function Home() {
 
     const authHeader = { Authorization: `Bearer ${nextToken}` };
     const fetchJson = async <TValue,>(path: string): Promise<TValue> => {
-      const response = await fetch(`${apiBase}${path}`, { headers: authHeader });
+      const response = await fetch(`${apiBase}${path}`, {
+        headers: authHeader,
+      });
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || response.statusText);
+        throw new Error(await responseMessage(response));
       }
 
       return (await response.json()) as TValue;
     };
     const [nextCustomers, nextContracts, nextBills, nextProfits, nextRequests] =
       await Promise.all([
-        fetchJson<Customer[]>("/customers"),
-        fetchJson<Contract[]>("/contracts"),
-        fetchJson<Bill[]>(`/bills?periodMonth=${periodMonth}`),
-        fetchJson<ProfitRow[]>(
-          `/reports/customer-profit?periodMonth=${periodMonth}`
+        fetchJson<Customer[] | PaginatedResponse<Customer>>(
+          "/customers?pageSize=50",
         ),
-        fetchJson<PaymentRequest[]>("/payment-requests")
+        fetchJson<Contract[] | PaginatedResponse<Contract>>(
+          "/contracts?pageSize=50",
+        ),
+        fetchJson<Bill[] | PaginatedResponse<Bill>>(
+          `/bills?periodMonth=${periodMonth}&pageSize=50`,
+        ),
+        fetchJson<ProfitRow[]>(
+          `/reports/customer-profit?periodMonth=${periodMonth}`,
+        ),
+        fetchJson<PaymentRequest[] | PaginatedResponse<PaymentRequest>>(
+          "/payment-requests?pageSize=50",
+        ),
       ]);
 
     applyConsoleData({
-      customers: nextCustomers,
-      contracts: nextContracts,
-      bills: nextBills,
+      customers: listItems(nextCustomers),
+      contracts: listItems(nextContracts),
+      bills: listItems(nextBills),
       profits: nextProfits,
-      paymentRequests: nextRequests
+      paymentRequests: listItems(nextRequests),
     });
     setMessage("数据已刷新");
   }
@@ -318,7 +362,7 @@ export default function Home() {
         user: ApiUser;
       }>("/auth/login", {
         method: "POST",
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password }),
       });
       setDemoMode(false);
       setToken(result.accessToken);
@@ -329,15 +373,12 @@ export default function Home() {
       setMessage(
         error instanceof Error
           ? `登录失败：${error.message}`
-          : "登录失败，请检查后端服务"
+          : "登录失败，请检查后端服务",
       );
     }
   }
 
-  async function submitAction(
-    label: string,
-    action: () => Promise<unknown>
-  ) {
+  async function submitAction(label: string, action: () => Promise<unknown>) {
     try {
       setMessage(`${label}处理中`);
       if (demoMode) {
@@ -398,8 +439,8 @@ export default function Home() {
               onClick={() =>
                 void refresh().catch((error: unknown) =>
                   setMessage(
-                    error instanceof Error ? error.message : "刷新失败"
-                  )
+                    error instanceof Error ? error.message : "刷新失败",
+                  ),
                 )
               }
               type="button"
@@ -468,9 +509,9 @@ export default function Home() {
                       body: JSON.stringify({
                         code: customerCode,
                         name: customerName,
-                        status: "ACTIVE"
-                      })
-                    })
+                        status: "ACTIVE",
+                      }),
+                    }),
                   );
                 }}
               >
@@ -504,18 +545,20 @@ export default function Home() {
                           {
                             name: "基础服务费",
                             kind: "FIXED",
-                            amount: contractFee
-                          }
-                        ]
-                      })
-                    })
+                            amount: contractFee,
+                          },
+                        ],
+                      }),
+                    }),
                   );
                 }}
               >
                 <h3>合同</h3>
                 <select
                   aria-label="客户"
-                  onChange={(event) => setSelectedCustomerId(event.target.value)}
+                  onChange={(event) =>
+                    setSelectedCustomerId(event.target.value)
+                  }
                   value={selectedCustomerId}
                 >
                   <option value="">选择客户</option>
@@ -544,15 +587,17 @@ export default function Home() {
                   void submitAction("生成账单", () =>
                     request("/billing-runs", {
                       method: "POST",
-                      body: JSON.stringify({ periodMonth })
-                    })
+                      body: JSON.stringify({ periodMonth }),
+                    }),
                   );
                 }}
               >
                 <h3>账单</h3>
                 <select
                   aria-label="合同"
-                  onChange={(event) => setSelectedContractId(event.target.value)}
+                  onChange={(event) =>
+                    setSelectedContractId(event.target.value)
+                  }
                   value={selectedContractId}
                 >
                   <option value="">选择合同</option>
@@ -569,8 +614,8 @@ export default function Home() {
                     void submitAction("客户确认", () =>
                       request(`/bills/${selectedBillId}/confirm-customer`, {
                         method: "POST",
-                        body: JSON.stringify({ confirmedByName: user?.name })
-                      })
+                        body: JSON.stringify({ confirmedByName: user?.name }),
+                      }),
                     )
                   }
                   type="button"
@@ -594,12 +639,13 @@ export default function Home() {
                         allocations: [
                           {
                             billId: selectedBillId,
-                            amount: bills.find((bill) => bill.id === selectedBillId)
-                              ?.totalAmount
-                          }
-                        ]
-                      })
-                    })
+                            amount: bills.find(
+                              (bill) => bill.id === selectedBillId,
+                            )?.totalAmount,
+                          },
+                        ],
+                      }),
+                    }),
                   );
                 }}
               >
@@ -625,19 +671,20 @@ export default function Home() {
                         method: "POST",
                         body: JSON.stringify({
                           receivedAt: new Date().toISOString(),
-                          amount: bills.find((bill) => bill.id === selectedBillId)
-                            ?.totalAmount,
+                          amount: bills.find(
+                            (bill) => bill.id === selectedBillId,
+                          )?.totalAmount,
                           account: "默认收款账户",
                           allocations: [
                             {
                               billId: selectedBillId,
                               amount: bills.find(
-                                (bill) => bill.id === selectedBillId
-                              )?.totalAmount
-                            }
-                          ]
-                        })
-                      })
+                                (bill) => bill.id === selectedBillId,
+                              )?.totalAmount,
+                            },
+                          ],
+                        }),
+                      }),
                     )
                   }
                   type="button"
@@ -663,11 +710,11 @@ export default function Home() {
                             customerId: selectedCustomerId,
                             periodMonth,
                             amount: "1000.00",
-                            description: "服务成本"
-                          }
-                        ]
-                      })
-                    })
+                            description: "服务成本",
+                          },
+                        ],
+                      }),
+                    }),
                   );
                 }}
               >
@@ -685,9 +732,9 @@ export default function Home() {
                           incurredDate: new Date().toISOString(),
                           description: "服务成本",
                           createPayable: true,
-                          vendorName: "示例供应商"
-                        })
-                      })
+                          vendorName: "示例供应商",
+                        }),
+                      }),
                     )
                   }
                   type="button"
@@ -703,8 +750,8 @@ export default function Home() {
                   void submitAction("月度结账", () =>
                     request(`/periods/${periodMonth}/close`, {
                       method: "POST",
-                      body: JSON.stringify({ reason: "月度结账" })
-                    })
+                      body: JSON.stringify({ reason: "月度结账" }),
+                    }),
                   );
                 }}
               >
@@ -715,8 +762,8 @@ export default function Home() {
                     void submitAction("解锁账期", () =>
                       request(`/periods/${periodMonth}/reopen`, {
                         method: "POST",
-                        body: JSON.stringify({ reason: "管理员解锁" })
-                      })
+                        body: JSON.stringify({ reason: "管理员解锁" }),
+                      }),
                     )
                   }
                   type="button"

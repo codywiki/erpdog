@@ -47,6 +47,7 @@ https://codywiki.github.io/erpdog/
 - `docs/adr/`：关键技术决策记录。
 - `docs/plans/2026-04-30-phase-0-implementation.md`：Phase 0 实施清单。
 - `docs/plans/2026-04-30-business-core-implementation.md`：业务核心闭环实现记录。
+- `docs/process/code-review.md`：代码审查流程、质量门禁和合并策略。
 
 ## 当前业务能力
 
@@ -57,6 +58,21 @@ https://codywiki.github.io/erpdog/
 - 成本、应付、付款申请、审批、付款登记和应付余额更新。
 - 月度结账/解锁、审计日志、附件元数据、客户利润和负责人排行报表。
 - Worker 支持账单生成队列和 Outbox 处理占位，后续可接飞书适配器。
+
+## 代码审查
+
+提交 PR 前建议执行：
+
+```bash
+pnpm db:generate
+pnpm exec prisma validate --schema prisma/schema.prisma
+pnpm format:check
+pnpm -r typecheck
+pnpm -r build
+pnpm audit --audit-level moderate
+```
+
+PR 会自动触发 `Code Review Gate` 工作流，并使用 `.github/pull_request_template.md` 中的业务、权限、金额、锁账和用户体验清单完成审查。
 
 ## 预览数据
 

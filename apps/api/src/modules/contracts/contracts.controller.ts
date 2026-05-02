@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
@@ -17,14 +25,16 @@ export class ContractsController {
   @Get()
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
-    PERMISSION_CODES.CUSTOMER_READ_ALL
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
   )
   list(
     @CurrentUser() user: AuthenticatedUser,
     @Query("customerId") customerId?: string,
-    @Query("status") status?: string
+    @Query("status") status?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
-    return this.contracts.list(user, { customerId, status });
+    return this.contracts.list(user, { customerId, status, page, pageSize });
   }
 
   @Post()
@@ -37,7 +47,7 @@ export class ContractsController {
   @RequirePermissions(PERMISSION_CODES.CONTRACT_WRITE)
   importContracts(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.contracts.importContracts(user, body);
   }
@@ -45,7 +55,7 @@ export class ContractsController {
   @Get("charge-rule-templates")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
-    PERMISSION_CODES.CUSTOMER_READ_ALL
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
   )
   listTemplates(@CurrentUser() user: AuthenticatedUser) {
     return this.contracts.listTemplates(user);
@@ -53,14 +63,17 @@ export class ContractsController {
 
   @Post("charge-rule-templates")
   @RequirePermissions(PERMISSION_CODES.CONTRACT_WRITE)
-  createTemplate(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
+  createTemplate(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
     return this.contracts.createTemplate(user, body);
   }
 
   @Get(":id")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
-    PERMISSION_CODES.CUSTOMER_READ_ALL
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
   )
   get(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
     return this.contracts.get(user, id);
@@ -71,7 +84,7 @@ export class ContractsController {
   update(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.contracts.update(user, id, body);
   }
@@ -81,7 +94,7 @@ export class ContractsController {
   addChargeItem(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.contracts.addChargeItem(user, id, body);
   }

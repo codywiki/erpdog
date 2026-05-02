@@ -51,4 +51,3 @@ volumes:
   erpdog-postgres-data:
   erpdog-redis-data:
   erpdog-minio-data:
-

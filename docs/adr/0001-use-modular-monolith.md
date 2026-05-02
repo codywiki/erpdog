@@ -64,4 +64,3 @@ Rejected because erpdog has real domain complexity: locks, reversals, allocation
 **Low-code ERP/Odoo-style customization**
 
 Rejected for the initial build direction because the confirmed requirements need tailored billing, allocations, payment approvals, locking, and Feishu integration. Custom code gives better control.
-

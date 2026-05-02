@@ -2,7 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
-  UnauthorizedException
+  UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
@@ -22,14 +22,14 @@ type RequestWithAuth = {
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_ROUTE, [
-      context.getHandler(),
-      context.getClass()
-    ]);
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_ROUTE,
+      [context.getHandler(), context.getClass()],
+    );
 
     if (isPublic) {
       return true;
@@ -43,9 +43,8 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      request.user = await this.jwtService.verifyAsync<AuthenticatedUser>(
-        token
-      );
+      request.user =
+        await this.jwtService.verifyAsync<AuthenticatedUser>(token);
       return true;
     } catch {
       throw new UnauthorizedException("Invalid or expired bearer token.");
@@ -57,4 +56,3 @@ export class JwtAuthGuard implements CanActivate {
     return type === "Bearer" ? token : undefined;
   }
 }
-

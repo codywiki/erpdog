@@ -5,6 +5,6 @@ import { PeriodLockService } from "./period-lock.service";
 @Global()
 @Module({
   providers: [PeriodLockService],
-  exports: [PeriodLockService]
+  exports: [PeriodLockService],
 })
 export class PeriodsModule {}

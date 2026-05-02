@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
@@ -17,14 +25,16 @@ export class CustomersController {
   @Get()
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
-    PERMISSION_CODES.CUSTOMER_READ_ALL
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
   )
   list(
     @CurrentUser() user: AuthenticatedUser,
     @Query("q") q?: string,
-    @Query("status") status?: string
+    @Query("status") status?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
-    return this.customers.list(user, { q, status });
+    return this.customers.list(user, { q, status, page, pageSize });
   }
 
   @Post()
@@ -37,7 +47,7 @@ export class CustomersController {
   @RequirePermissions(PERMISSION_CODES.CUSTOMER_WRITE)
   importCustomers(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.customers.importCustomers(user, body);
   }
@@ -45,7 +55,7 @@ export class CustomersController {
   @Get(":id")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
-    PERMISSION_CODES.CUSTOMER_READ_ALL
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
   )
   get(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
     return this.customers.get(user, id);
@@ -56,7 +66,7 @@ export class CustomersController {
   update(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.customers.update(user, id, body);
   }
@@ -66,7 +76,7 @@ export class CustomersController {
   addContact(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.customers.addContact(user, id, body);
   }
@@ -76,7 +86,7 @@ export class CustomersController {
   addBillingProfile(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.customers.addBillingProfile(user, id, body);
   }

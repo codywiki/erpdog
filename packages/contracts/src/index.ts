@@ -2,7 +2,7 @@ export const ROLE_CODES = {
   ADMIN: "admin",
   OWNER: "owner",
   FINANCE: "finance",
-  CUSTOMER_MANAGER: "customer_manager"
+  CUSTOMER_MANAGER: "customer_manager",
 } as const;
 
 export type RoleCode = (typeof ROLE_CODES)[keyof typeof ROLE_CODES];
@@ -23,7 +23,7 @@ export const PERMISSION_CODES = {
   PERIOD_CLOSE: "period.close",
   PERIOD_REOPEN: "period.reopen",
   REPORT_VIEW: "report.view",
-  AUDIT_VIEW: "audit.view"
+  AUDIT_VIEW: "audit.view",
 } as const;
 
 export type PermissionCode =
@@ -32,7 +32,7 @@ export type PermissionCode =
 export const CUSTOMER_STATUSES = {
   ACTIVE: "ACTIVE",
   PAUSED: "PAUSED",
-  TERMINATED: "TERMINATED"
+  TERMINATED: "TERMINATED",
 } as const;
 
 export type CustomerStatus =
@@ -43,7 +43,7 @@ export const CONTRACT_STATUSES = {
   ACTIVE: "ACTIVE",
   SUSPENDED: "SUSPENDED",
   EXPIRED: "EXPIRED",
-  TERMINATED: "TERMINATED"
+  TERMINATED: "TERMINATED",
 } as const;
 
 export type ContractStatus =
@@ -57,7 +57,7 @@ export const BILL_STATUSES = {
   CUSTOMER_CONFIRMED: "CUSTOMER_CONFIRMED",
   CLOSED: "CLOSED",
   VOIDED: "VOIDED",
-  ADJUSTED: "ADJUSTED"
+  ADJUSTED: "ADJUSTED",
 } as const;
 
 export type BillStatus = (typeof BILL_STATUSES)[keyof typeof BILL_STATUSES];
@@ -65,7 +65,7 @@ export type BillStatus = (typeof BILL_STATUSES)[keyof typeof BILL_STATUSES];
 export const INVOICE_STATUSES = {
   DRAFT: "DRAFT",
   ISSUED: "ISSUED",
-  VOIDED: "VOIDED"
+  VOIDED: "VOIDED",
 } as const;
 
 export type InvoiceStatus =
@@ -73,7 +73,7 @@ export type InvoiceStatus =
 
 export const RECEIPT_STATUSES = {
   REGISTERED: "REGISTERED",
-  REVERSED: "REVERSED"
+  REVERSED: "REVERSED",
 } as const;
 
 export type ReceiptStatus =
@@ -83,7 +83,7 @@ export const PAYABLE_STATUSES = {
   UNPAID: "UNPAID",
   PARTIALLY_PAID: "PARTIALLY_PAID",
   PAID: "PAID",
-  VOIDED: "VOIDED"
+  VOIDED: "VOIDED",
 } as const;
 
 export type PayableStatus =
@@ -96,7 +96,7 @@ export const PAYMENT_REQUEST_STATUSES = {
   REJECTED: "REJECTED",
   CANCELLED: "CANCELLED",
   PARTIALLY_PAID: "PARTIALLY_PAID",
-  PAID: "PAID"
+  PAID: "PAID",
 } as const;
 
 export type PaymentRequestStatus =
@@ -105,7 +105,7 @@ export type PaymentRequestStatus =
 export const PERIOD_STATUSES = {
   OPEN: "OPEN",
   CLOSED: "CLOSED",
-  REOPENED: "REOPENED"
+  REOPENED: "REOPENED",
 } as const;
 
 export type PeriodStatus =

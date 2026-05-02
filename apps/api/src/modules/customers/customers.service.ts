@@ -1,36 +1,38 @@
 import {
   ForbiddenException,
   Injectable,
-  NotFoundException
+  NotFoundException,
 } from "@nestjs/common";
 import { CustomerStatus, Prisma } from "@prisma/client";
 
-import {
-  PERMISSION_CODES,
-  type AuthenticatedUser
-} from "@erpdog/contracts";
+import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
 import { AuditService } from "../../common/audit/audit.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
+import {
+  paginated,
+  parsePagination,
+  type PaginationQuery,
+} from "../../common/utils/pagination";
 import {
   arrayField,
   bodyObject,
   booleanField,
   optionalString,
   stringField,
-  type Payload
+  type Payload,
 } from "../../common/utils/payload";
 
 type CustomerFilters = {
   q?: string;
   status?: string;
-};
+} & PaginationQuery;
 
 @Injectable()
 export class CustomersService {
   constructor(
     private readonly audit: AuditService,
-    private readonly prisma: PrismaService
+    private readonly prisma: PrismaService,
   ) {}
 
   async list(user: AuthenticatedUser, filters: CustomerFilters) {
@@ -41,21 +43,29 @@ export class CustomersService {
         ? {
             OR: [
               { name: { contains: filters.q, mode: "insensitive" } },
-              { code: { contains: filters.q, mode: "insensitive" } }
-            ]
+              { code: { contains: filters.q, mode: "insensitive" } },
+            ],
           }
-        : {})
+        : {}),
     };
 
     if (!this.canReadAll(user)) {
       where.owners = { some: { userId: user.id } };
     }
 
-    return this.prisma.customer.findMany({
-      where,
-      include: this.customerInclude(),
-      orderBy: { createdAt: "desc" }
-    });
+    const pagination = parsePagination(filters);
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.customer.findMany({
+        where,
+        include: this.customerInclude(),
+        orderBy: { createdAt: "desc" },
+        skip: pagination.skip,
+        take: pagination.take,
+      }),
+      this.prisma.customer.count({ where }),
+    ]);
+
+    return paginated(items, total, pagination);
   }
 
   async get(user: AuthenticatedUser, id: string) {
@@ -63,7 +73,7 @@ export class CustomersService {
 
     return this.prisma.customer.findUniqueOrThrow({
       where: { id },
-      include: this.customerInclude()
+      include: this.customerInclude(),
     });
   }
 
@@ -86,19 +96,19 @@ export class CustomersService {
           owners: {
             create: ownerUserIds.map((userId, index) => ({
               userId,
-              isPrimary: index === 0
-            }))
+              isPrimary: index === 0,
+            })),
           },
           contacts: {
-            create: contacts.map((contact) => this.contactData(contact))
+            create: contacts.map((contact) => this.contactData(contact)),
           },
           billingProfiles: {
             create: billingProfiles.map((profile) =>
-              this.billingProfileData(profile)
-            )
-          }
+              this.billingProfileData(profile),
+            ),
+          },
         },
-        include: this.customerInclude()
+        include: this.customerInclude(),
       });
 
       await tx.auditLog.create({
@@ -108,8 +118,8 @@ export class CustomersService {
           action: "customer.create",
           entityType: "customer",
           entityId: created.id,
-          after: { id: created.id, code: created.code, name: created.name }
-        }
+          after: { id: created.id, code: created.code, name: created.name },
+        },
       });
 
       return created;
@@ -130,9 +140,9 @@ export class CustomersService {
         status: this.status(body, before.status),
         industry: optionalString(body, "industry") ?? before.industry,
         source: optionalString(body, "source") ?? before.source,
-        notes: optionalString(body, "notes") ?? before.notes
+        notes: optionalString(body, "notes") ?? before.notes,
       },
-      include: this.customerInclude()
+      include: this.customerInclude(),
     });
 
     await this.audit.log({
@@ -142,21 +152,25 @@ export class CustomersService {
       entityType: "customer",
       entityId: id,
       before: { code: before.code, name: before.name, status: before.status },
-      after: { code: updated.code, name: updated.name, status: updated.status }
+      after: { code: updated.code, name: updated.name, status: updated.status },
     });
 
     return updated;
   }
 
-  async addContact(user: AuthenticatedUser, customerId: string, rawBody: unknown) {
+  async addContact(
+    user: AuthenticatedUser,
+    customerId: string,
+    rawBody: unknown,
+  ) {
     await this.ensureCustomerAccess(user, customerId);
     const body = bodyObject(rawBody);
 
     const contact = await this.prisma.customerContact.create({
       data: {
         customerId,
-        ...this.contactData(body)
-      }
+        ...this.contactData(body),
+      },
     });
 
     await this.audit.log({
@@ -165,7 +179,7 @@ export class CustomersService {
       action: "customer.contact.create",
       entityType: "customer",
       entityId: customerId,
-      after: { id: contact.id, name: contact.name }
+      after: { id: contact.id, name: contact.name },
     });
 
     return contact;
@@ -174,7 +188,7 @@ export class CustomersService {
   async addBillingProfile(
     user: AuthenticatedUser,
     customerId: string,
-    rawBody: unknown
+    rawBody: unknown,
   ) {
     await this.ensureCustomerAccess(user, customerId);
     const body = bodyObject(rawBody);
@@ -182,8 +196,8 @@ export class CustomersService {
     const profile = await this.prisma.customerBillingProfile.create({
       data: {
         customerId,
-        ...this.billingProfileData(body)
-      }
+        ...this.billingProfileData(body),
+      },
     });
 
     await this.audit.log({
@@ -192,7 +206,7 @@ export class CustomersService {
       action: "customer.billing_profile.create",
       entityType: "customer",
       entityId: customerId,
-      after: { id: profile.id, title: profile.title }
+      after: { id: profile.id, title: profile.title },
     });
 
     return profile;
@@ -207,13 +221,13 @@ export class CustomersService {
       try {
         const created = await this.create(user, {
           ...row,
-          ownerUserIds: arrayField<string>(row, "ownerUserIds")
+          ownerUserIds: arrayField<string>(row, "ownerUserIds"),
         });
         results.push({ row: index + 1, id: created.id });
       } catch (error) {
         results.push({
           row: index + 1,
-          error: error instanceof Error ? error.message : "Unknown error"
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       }
     }
@@ -222,7 +236,7 @@ export class CustomersService {
       total: rows.length,
       succeeded: results.filter((result) => result.id).length,
       failed: results.filter((result) => result.error).length,
-      results
+      results,
     };
   }
 
@@ -230,8 +244,8 @@ export class CustomersService {
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: customerId,
-        orgId: user.orgId
-      }
+        orgId: user.orgId,
+      },
     });
 
     if (!customer) {
@@ -246,9 +260,9 @@ export class CustomersService {
       where: {
         customerId_userId: {
           customerId,
-          userId: user.id
-        }
-      }
+          userId: user.id,
+        },
+      },
     });
 
     if (!owner) {
@@ -272,11 +286,11 @@ export class CustomersService {
             select: {
               id: true,
               email: true,
-              name: true
-            }
-          }
-        }
-      }
+              name: true,
+            },
+          },
+        },
+      },
     } satisfies Prisma.CustomerInclude;
   }
 
@@ -287,10 +301,12 @@ export class CustomersService {
 
   private status(
     body: Payload,
-    fallback: CustomerStatus = CustomerStatus.ACTIVE
+    fallback: CustomerStatus = CustomerStatus.ACTIVE,
   ): CustomerStatus {
     const value = optionalString(body, "status");
-    return value && value in CustomerStatus ? (value as CustomerStatus) : fallback;
+    return value && value in CustomerStatus
+      ? (value as CustomerStatus)
+      : fallback;
   }
 
   private contactData(body: Payload) {
@@ -300,7 +316,7 @@ export class CustomersService {
       phone: optionalString(body, "phone"),
       email: optionalString(body, "email"),
       address: optionalString(body, "address"),
-      isPrimary: booleanField(body, "isPrimary")
+      isPrimary: booleanField(body, "isPrimary"),
     };
   }
 
@@ -312,7 +328,7 @@ export class CustomersService {
       bankAccount: optionalString(body, "bankAccount"),
       address: optionalString(body, "address"),
       phone: optionalString(body, "phone"),
-      isDefault: booleanField(body, "isDefault")
+      isDefault: booleanField(body, "isDefault"),
     };
   }
 }

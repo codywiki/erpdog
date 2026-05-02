@@ -1,0 +1,71 @@
+name: Code Review Gate
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: Review checks
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://erpdog:erpdog@localhost:5432/erpdog?schema=public
+      JWT_SECRET: ci-secret-with-at-least-24-chars
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: corepack pnpm db:generate
+
+      - name: Validate Prisma schema
+        run: corepack pnpm exec prisma validate --schema prisma/schema.prisma
+
+      - name: Check formatting
+        run: corepack pnpm format:check
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Typecheck
+        run: corepack pnpm -r typecheck
+
+      - name: Build
+        run: corepack pnpm -r build
+
+      - name: Audit dependencies
+        run: corepack pnpm audit --audit-level moderate
+
+      - name: Review summary
+        if: always()
+        run: |
+          {
+            echo "## Code Review Gate"
+            echo ""
+            echo "- Prisma schema validation"
+            echo "- Prettier formatting check"
+            echo "- Git whitespace check"
+            echo "- Workspace typecheck"
+            echo "- Workspace build"
+            echo "- Moderate-and-above dependency audit"
+          } >> "$GITHUB_STEP_SUMMARY"

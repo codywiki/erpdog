@@ -1,14 +1,16 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { ChargeItemKind, ContractStatus, Prisma } from "@prisma/client";
 
-import {
-  PERMISSION_CODES,
-  type AuthenticatedUser
-} from "@erpdog/contracts";
+import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
 import { AuditService } from "../../common/audit/audit.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
 import { decimal, optionalDecimal } from "../../common/utils/finance";
+import {
+  paginated,
+  parsePagination,
+  type PaginationQuery,
+} from "../../common/utils/pagination";
 import {
   arrayField,
   bodyObject,
@@ -18,45 +20,53 @@ import {
   optionalDate,
   optionalString,
   stringField,
-  type Payload
+  type Payload,
 } from "../../common/utils/payload";
 import { CustomersService } from "../customers/customers.service";
 
 type ContractFilters = {
   customerId?: string;
   status?: string;
-};
+} & PaginationQuery;
 
 @Injectable()
 export class ContractsService {
   constructor(
     private readonly audit: AuditService,
     private readonly customers: CustomersService,
-    private readonly prisma: PrismaService
+    private readonly prisma: PrismaService,
   ) {}
 
   async list(user: AuthenticatedUser, filters: ContractFilters) {
     const where: Prisma.ContractWhereInput = {
       orgId: user.orgId,
       ...(filters.customerId ? { customerId: filters.customerId } : {}),
-      ...(filters.status ? { status: filters.status as ContractStatus } : {})
+      ...(filters.status ? { status: filters.status as ContractStatus } : {}),
     };
 
     if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
       where.customer = { owners: { some: { userId: user.id } } };
     }
 
-    return this.prisma.contract.findMany({
-      where,
-      include: this.contractInclude(),
-      orderBy: { createdAt: "desc" }
-    });
+    const pagination = parsePagination(filters);
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.contract.findMany({
+        where,
+        include: this.contractInclude(),
+        orderBy: { createdAt: "desc" },
+        skip: pagination.skip,
+        take: pagination.take,
+      }),
+      this.prisma.contract.count({ where }),
+    ]);
+
+    return paginated(items, total, pagination);
   }
 
   async get(user: AuthenticatedUser, id: string) {
     const contract = await this.prisma.contract.findFirst({
       where: { id, orgId: user.orgId },
-      include: this.contractInclude()
+      include: this.contractInclude(),
     });
 
     if (!contract) {
@@ -86,10 +96,10 @@ export class ContractsService {
         currency: stringField(body, "currency", "CNY"),
         notes: optionalString(body, "notes"),
         chargeItems: {
-          create: chargeItems.map((item) => this.chargeItemData(item))
-        }
+          create: chargeItems.map((item) => this.chargeItemData(item)),
+        },
       },
-      include: this.contractInclude()
+      include: this.contractInclude(),
     });
 
     await this.audit.log({
@@ -101,8 +111,8 @@ export class ContractsService {
       after: {
         id: contract.id,
         code: contract.code,
-        customerId: contract.customerId
-      }
+        customerId: contract.customerId,
+      },
     });
 
     return contract;
@@ -125,9 +135,9 @@ export class ContractsService {
             : (optionalDate(body, "endDate") ?? before.endDate),
         billingDay: intField(body, "billingDay", before.billingDay),
         currency: optionalString(body, "currency") ?? before.currency,
-        notes: optionalString(body, "notes") ?? before.notes
+        notes: optionalString(body, "notes") ?? before.notes,
       },
-      include: this.contractInclude()
+      include: this.contractInclude(),
     });
 
     await this.audit.log({
@@ -137,7 +147,7 @@ export class ContractsService {
       entityType: "contract",
       entityId: id,
       before: { code: before.code, status: before.status },
-      after: { code: updated.code, status: updated.status }
+      after: { code: updated.code, status: updated.status },
     });
 
     return updated;
@@ -146,15 +156,15 @@ export class ContractsService {
   async addChargeItem(
     user: AuthenticatedUser,
     contractId: string,
-    rawBody: unknown
+    rawBody: unknown,
   ) {
     const contract = await this.get(user, contractId);
     const body = bodyObject(rawBody);
     const item = await this.prisma.contractChargeItem.create({
       data: {
         contractId: contract.id,
-        ...this.chargeItemData(body)
-      }
+        ...this.chargeItemData(body),
+      },
     });
 
     await this.audit.log({
@@ -163,7 +173,7 @@ export class ContractsService {
       action: "contract.charge_item.create",
       entityType: "contract",
       entityId: contract.id,
-      after: { id: item.id, name: item.name, amount: item.amount.toString() }
+      after: { id: item.id, name: item.name, amount: item.amount.toString() },
     });
 
     return item;
@@ -181,7 +191,7 @@ export class ContractsService {
       } catch (error) {
         results.push({
           row: index + 1,
-          error: error instanceof Error ? error.message : "Unknown error"
+          error: error instanceof Error ? error.message : "Unknown error",
         });
       }
     }
@@ -190,14 +200,14 @@ export class ContractsService {
       total: rows.length,
       succeeded: results.filter((result) => result.id).length,
       failed: results.filter((result) => result.error).length,
-      results
+      results,
     };
   }
 
   listTemplates(user: AuthenticatedUser) {
     return this.prisma.chargeRuleTemplate.findMany({
       where: { orgId: user.orgId, isActive: true },
-      orderBy: { createdAt: "desc" }
+      orderBy: { createdAt: "desc" },
     });
   }
 
@@ -209,8 +219,8 @@ export class ContractsService {
         code: stringField(body, "code"),
         name: stringField(body, "name"),
         description: optionalString(body, "description"),
-        payload: (body.payload ?? {}) as Prisma.InputJsonValue
-      }
+        payload: (body.payload ?? {}) as Prisma.InputJsonValue,
+      },
     });
 
     await this.audit.log({
@@ -219,7 +229,7 @@ export class ContractsService {
       action: "charge_rule_template.create",
       entityType: "charge_rule_template",
       entityId: template.id,
-      after: { id: template.id, code: template.code }
+      after: { id: template.id, code: template.code },
     });
 
     return template;
@@ -227,18 +237,22 @@ export class ContractsService {
 
   private status(
     body: Payload,
-    fallback: ContractStatus = ContractStatus.DRAFT
+    fallback: ContractStatus = ContractStatus.DRAFT,
   ): ContractStatus {
     const value = optionalString(body, "status");
-    return value && value in ContractStatus ? (value as ContractStatus) : fallback;
+    return value && value in ContractStatus
+      ? (value as ContractStatus)
+      : fallback;
   }
 
   private kind(
     body: Payload,
-    fallback: ChargeItemKind = ChargeItemKind.FIXED
+    fallback: ChargeItemKind = ChargeItemKind.FIXED,
   ): ChargeItemKind {
     const value = optionalString(body, "kind");
-    return value && value in ChargeItemKind ? (value as ChargeItemKind) : fallback;
+    return value && value in ChargeItemKind
+      ? (value as ChargeItemKind)
+      : fallback;
   }
 
   private chargeItemData(body: Payload) {
@@ -251,7 +265,7 @@ export class ContractsService {
       description: optionalString(body, "description"),
       startsAt: optionalDate(body, "startsAt"),
       endsAt: optionalDate(body, "endsAt"),
-      isActive: booleanField(body, "isActive", true)
+      isActive: booleanField(body, "isActive", true),
     };
   }
 
@@ -261,12 +275,12 @@ export class ContractsService {
         select: {
           id: true,
           code: true,
-          name: true
-        }
+          name: true,
+        },
       },
       chargeItems: {
-        orderBy: { createdAt: "asc" }
-      }
+        orderBy: { createdAt: "asc" },
+      },
     } satisfies Prisma.ContractInclude;
   }
 }

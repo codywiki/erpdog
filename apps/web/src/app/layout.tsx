@@ -4,11 +4,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "erpdog",
-  description: "Internal ERP for long-running service operations"
+  description: "Internal ERP for long-running service operations",
 };
 
 export default function RootLayout({
-  children
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
@@ -18,4 +18,3 @@ export default function RootLayout({
     </html>
   );
 }
-

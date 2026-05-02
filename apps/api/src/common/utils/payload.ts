@@ -13,7 +13,7 @@ export function bodyObject(value: unknown): Payload {
 export function stringField(
   body: Payload,
   field: string,
-  fallback?: string
+  fallback?: string,
 ): string {
   const value = body[field];
 
@@ -28,7 +28,10 @@ export function stringField(
   throw new BadRequestException(`${field} is required.`);
 }
 
-export function optionalString(body: Payload, field: string): string | undefined {
+export function optionalString(
+  body: Payload,
+  field: string,
+): string | undefined {
   const value = body[field];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -38,7 +41,11 @@ export function booleanField(body: Payload, field: string, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
 }
 
-export function intField(body: Payload, field: string, fallback: number): number {
+export function intField(
+  body: Payload,
+  field: string,
+  fallback: number,
+): number {
   const value = body[field];
 
   if (typeof value === "number" && Number.isInteger(value)) {

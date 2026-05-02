@@ -22,11 +22,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family:
-    "Aptos",
-    "Segoe UI",
-    "Microsoft YaHei",
-    sans-serif;
+  font-family: "Aptos", "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 button,

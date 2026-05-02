@@ -12,14 +12,14 @@ const nextConfig = {
         ...(basePath
           ? {
               assetPrefix: `${basePath}/`,
-              basePath
+              basePath,
             }
           : {}),
         images: {
-          unoptimized: true
-        }
+          unoptimized: true,
+        },
       }
-    : {})
+    : {}),
 };
 
 export default nextConfig;

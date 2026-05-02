@@ -9,18 +9,18 @@ import { prisma } from "./prisma";
 
 const env = parseServerEnv(process.env);
 const connection = new IORedis(env.REDIS_URL, {
-  maxRetriesPerRequest: null
+  maxRetriesPerRequest: null,
 });
 
 const workers = [
   new Worker("billing", handleBillingJob, {
     connection,
-    concurrency: 1
+    concurrency: 1,
   }),
   new Worker("outbox", handleOutboxJob, {
     connection,
-    concurrency: 5
-  })
+    concurrency: 5,
+  }),
 ];
 
 for (const worker of workers) {

@@ -24,22 +24,30 @@ export class BillingController {
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
     PERMISSION_CODES.CUSTOMER_READ_ALL,
-    PERMISSION_CODES.BILL_MANAGE
+    PERMISSION_CODES.BILL_MANAGE,
   )
   listBills(
     @CurrentUser() user: AuthenticatedUser,
     @Query("periodMonth") periodMonth?: string,
     @Query("customerId") customerId?: string,
-    @Query("status") status?: string
+    @Query("status") status?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
-    return this.billing.list(user, { periodMonth, customerId, status });
+    return this.billing.list(user, {
+      periodMonth,
+      customerId,
+      status,
+      page,
+      pageSize,
+    });
   }
 
   @Post("bills")
   @RequirePermissions(PERMISSION_CODES.BILL_MANAGE)
   createManualBill(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.billing.createManualBill(user, body);
   }
@@ -48,7 +56,7 @@ export class BillingController {
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_OWN,
     PERMISSION_CODES.CUSTOMER_READ_ALL,
-    PERMISSION_CODES.BILL_MANAGE
+    PERMISSION_CODES.BILL_MANAGE,
   )
   getBill(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
     return this.billing.get(user, id);
@@ -64,7 +72,7 @@ export class BillingController {
   @RequirePermissions(PERMISSION_CODES.BILL_MANAGE)
   financeReview(
     @CurrentUser() user: AuthenticatedUser,
-    @Param("id") id: string
+    @Param("id") id: string,
   ) {
     return this.billing.transition(user, id, "FINANCE_REVIEW", "bill.review");
   }
@@ -73,13 +81,13 @@ export class BillingController {
   @RequirePermissions(PERMISSION_CODES.BILL_MANAGE)
   sendToCustomer(
     @CurrentUser() user: AuthenticatedUser,
-    @Param("id") id: string
+    @Param("id") id: string,
   ) {
     return this.billing.transition(
       user,
       id,
       "CUSTOMER_PENDING",
-      "bill.customer_pending"
+      "bill.customer_pending",
     );
   }
 
@@ -88,7 +96,7 @@ export class BillingController {
   confirmCustomer(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.billing.confirmCustomer(user, id, body);
   }
@@ -98,7 +106,7 @@ export class BillingController {
   adjust(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.billing.adjust(user, id, body);
   }

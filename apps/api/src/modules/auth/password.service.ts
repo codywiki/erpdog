@@ -13,4 +13,3 @@ export class PasswordService {
     return bcrypt.compare(password, hash);
   }
 }
-

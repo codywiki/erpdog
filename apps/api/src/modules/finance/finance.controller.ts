@@ -15,7 +15,10 @@ export class FinanceController {
   constructor(private readonly finance: FinanceService) {}
 
   @Get("extra-charge-categories")
-  @RequirePermissions(PERMISSION_CODES.CUSTOMER_READ_ALL, PERMISSION_CODES.CUSTOMER_READ_OWN)
+  @RequirePermissions(
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
+    PERMISSION_CODES.CUSTOMER_READ_OWN,
+  )
   listExtraChargeCategories(@CurrentUser() user: AuthenticatedUser) {
     return this.finance.listExtraChargeCategories(user);
   }
@@ -24,34 +27,51 @@ export class FinanceController {
   @RequirePermissions(PERMISSION_CODES.BILL_MANAGE)
   createExtraChargeCategory(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.createExtraChargeCategory(user, body);
   }
 
   @Get("extra-charges")
-  @RequirePermissions(PERMISSION_CODES.CUSTOMER_READ_ALL, PERMISSION_CODES.CUSTOMER_READ_OWN)
+  @RequirePermissions(
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
+    PERMISSION_CODES.CUSTOMER_READ_OWN,
+  )
   listExtraCharges(
     @CurrentUser() user: AuthenticatedUser,
     @Query("periodMonth") periodMonth?: string,
-    @Query("customerId") customerId?: string
+    @Query("customerId") customerId?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
-    return this.finance.listExtraCharges(user, { periodMonth, customerId });
+    return this.finance.listExtraCharges(user, {
+      periodMonth,
+      customerId,
+      page,
+      pageSize,
+    });
   }
 
   @Post("extra-charges")
-  @RequirePermissions(PERMISSION_CODES.BILL_MANAGE, PERMISSION_CODES.CONTRACT_WRITE)
+  @RequirePermissions(
+    PERMISSION_CODES.BILL_MANAGE,
+    PERMISSION_CODES.CONTRACT_WRITE,
+  )
   createExtraCharge(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.createExtraCharge(user, body);
   }
 
   @Get("invoices")
   @RequirePermissions(PERMISSION_CODES.INVOICE_MANAGE)
-  listInvoices(@CurrentUser() user: AuthenticatedUser) {
-    return this.finance.listInvoices(user);
+  listInvoices(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listInvoices(user, { page, pageSize });
   }
 
   @Post("invoices")
@@ -68,8 +88,12 @@ export class FinanceController {
 
   @Get("receipts")
   @RequirePermissions(PERMISSION_CODES.RECEIPT_MANAGE)
-  listReceipts(@CurrentUser() user: AuthenticatedUser) {
-    return this.finance.listReceipts(user);
+  listReceipts(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listReceipts(user, { page, pageSize });
   }
 
   @Post("receipts")
@@ -80,7 +104,10 @@ export class FinanceController {
 
   @Post("receipts/:id/reverse")
   @RequirePermissions(PERMISSION_CODES.RECEIPT_MANAGE)
-  reverseReceipt(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
+  reverseReceipt(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
     return this.finance.reverseReceipt(user, id);
   }
 
@@ -92,7 +119,10 @@ export class FinanceController {
 
   @Post("cost-categories")
   @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
-  createCostCategory(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
+  createCostCategory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
     return this.finance.createCostCategory(user, body);
   }
 
@@ -101,21 +131,38 @@ export class FinanceController {
   listCostEntries(
     @CurrentUser() user: AuthenticatedUser,
     @Query("periodMonth") periodMonth?: string,
-    @Query("customerId") customerId?: string
+    @Query("customerId") customerId?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
   ) {
-    return this.finance.listCostEntries(user, { periodMonth, customerId });
+    return this.finance.listCostEntries(user, {
+      periodMonth,
+      customerId,
+      page,
+      pageSize,
+    });
   }
 
   @Post("cost-entries")
   @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
-  createCostEntry(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
+  createCostEntry(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
     return this.finance.createCostEntry(user, body);
   }
 
   @Get("payables")
-  @RequirePermissions(PERMISSION_CODES.COST_MANAGE, PERMISSION_CODES.PAYMENT_PAY)
-  listPayables(@CurrentUser() user: AuthenticatedUser) {
-    return this.finance.listPayables(user);
+  @RequirePermissions(
+    PERMISSION_CODES.COST_MANAGE,
+    PERMISSION_CODES.PAYMENT_PAY,
+  )
+  listPayables(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listPayables(user, { page, pageSize });
   }
 
   @Post("payables")
@@ -128,17 +175,21 @@ export class FinanceController {
   @RequirePermissions(
     PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
     PERMISSION_CODES.PAYMENT_REQUEST_APPROVE,
-    PERMISSION_CODES.PAYMENT_PAY
+    PERMISSION_CODES.PAYMENT_PAY,
   )
-  listPaymentRequests(@CurrentUser() user: AuthenticatedUser) {
-    return this.finance.listPaymentRequests(user);
+  listPaymentRequests(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listPaymentRequests(user, { page, pageSize });
   }
 
   @Post("payment-requests")
   @RequirePermissions(PERMISSION_CODES.PAYMENT_REQUEST_CREATE)
   createPaymentRequest(
     @CurrentUser() user: AuthenticatedUser,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.createPaymentRequest(user, body);
   }
@@ -147,7 +198,7 @@ export class FinanceController {
   @RequirePermissions(PERMISSION_CODES.PAYMENT_REQUEST_CREATE)
   submitPaymentRequest(
     @CurrentUser() user: AuthenticatedUser,
-    @Param("id") id: string
+    @Param("id") id: string,
   ) {
     return this.finance.submitPaymentRequest(user, id);
   }
@@ -157,7 +208,7 @@ export class FinanceController {
   approvePaymentRequest(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.approvePaymentRequest(user, id, body);
   }
@@ -167,15 +218,19 @@ export class FinanceController {
   rejectPaymentRequest(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.rejectPaymentRequest(user, id, body);
   }
 
   @Get("payments")
   @RequirePermissions(PERMISSION_CODES.PAYMENT_PAY)
-  listPayments(@CurrentUser() user: AuthenticatedUser) {
-    return this.finance.listPayments(user);
+  listPayments(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listPayments(user, { page, pageSize });
   }
 
   @Post("payments")
@@ -189,7 +244,7 @@ export class FinanceController {
   closePeriod(
     @CurrentUser() user: AuthenticatedUser,
     @Param("month") month: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.closePeriod(user, month, body);
   }
@@ -199,15 +254,22 @@ export class FinanceController {
   reopenPeriod(
     @CurrentUser() user: AuthenticatedUser,
     @Param("month") month: string,
-    @Body() body: Payload
+    @Body() body: Payload,
   ) {
     return this.finance.reopenPeriod(user, month, body);
   }
 
   @Get("attachments")
-  @RequirePermissions(PERMISSION_CODES.CUSTOMER_READ_ALL, PERMISSION_CODES.CUSTOMER_READ_OWN)
-  listAttachments(@CurrentUser() user: AuthenticatedUser) {
-    return this.finance.listAttachments(user);
+  @RequirePermissions(
+    PERMISSION_CODES.CUSTOMER_READ_ALL,
+    PERMISSION_CODES.CUSTOMER_READ_OWN,
+  )
+  listAttachments(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listAttachments(user, { page, pageSize });
   }
 
   @Post("attachments")
@@ -216,9 +278,12 @@ export class FinanceController {
     PERMISSION_CODES.INVOICE_MANAGE,
     PERMISSION_CODES.RECEIPT_MANAGE,
     PERMISSION_CODES.COST_MANAGE,
-    PERMISSION_CODES.PAYMENT_REQUEST_CREATE
+    PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
   )
-  createAttachment(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
+  createAttachment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
     return this.finance.createAttachment(user, body);
   }
 
@@ -226,7 +291,7 @@ export class FinanceController {
   @RequirePermissions(PERMISSION_CODES.REPORT_VIEW)
   customerProfit(
     @CurrentUser() user: AuthenticatedUser,
-    @Query("periodMonth") periodMonth?: string
+    @Query("periodMonth") periodMonth?: string,
   ) {
     return this.finance.customerProfit(user, periodMonth);
   }
@@ -235,7 +300,7 @@ export class FinanceController {
   @RequirePermissions(PERMISSION_CODES.REPORT_VIEW)
   ownerRanking(
     @CurrentUser() user: AuthenticatedUser,
-    @Query("periodMonth") periodMonth?: string
+    @Query("periodMonth") periodMonth?: string,
   ) {
     return this.finance.ownerRanking(user, periodMonth);
   }
