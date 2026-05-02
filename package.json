@@ -12,7 +12,7 @@
     "format:check": "prettier --check .",
     "audit": "corepack pnpm audit --audit-level moderate",
     "review:check": "corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm audit --audit-level moderate",
-    "test:e2e": "tsx apps/api/test/business-flow.e2e.ts",
+    "test:e2e": "tsx --tsconfig apps/api/tsconfig.json apps/api/test/business-flow.e2e.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
