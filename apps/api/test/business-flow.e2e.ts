@@ -158,7 +158,9 @@ async function main() {
 
   const { NestFactory } = await import("@nestjs/core");
   const { AppModule } = await import("../src/app.module");
-  const app = await NestFactory.create(AppModule, { logger: false });
+  const app = await NestFactory.create(AppModule, {
+    logger: ["error", "warn"],
+  });
   app.setGlobalPrefix("api/v1");
   app.useGlobalPipes(
     new ValidationPipe({
