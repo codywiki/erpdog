@@ -1,7 +1,12 @@
+import "reflect-metadata";
+
 import { ValidationPipe } from "@nestjs/common";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import writeXlsxFile, { type SheetData } from "write-excel-file/node";
 
 import { PERMISSION_CODES, ROLE_CODES } from "@erpdog/contracts";
@@ -146,6 +151,15 @@ async function workbookBase64(
   return buffer.toString("base64");
 }
 
+async function loadAppModule() {
+  const distAppModule = resolve(process.cwd(), "apps/api/dist/app.module.js");
+  if (existsSync(distAppModule)) {
+    return import(pathToFileURL(distAppModule).href);
+  }
+
+  return import("../src/app.module");
+}
+
 async function main() {
   configureEnv();
   const prisma = new PrismaClient();
@@ -157,7 +171,7 @@ async function main() {
   }
 
   const { NestFactory } = await import("@nestjs/core");
-  const { AppModule } = await import("../src/app.module");
+  const { AppModule } = await loadAppModule();
   const app = await NestFactory.create(AppModule, {
     logger: ["error", "warn"],
   });
