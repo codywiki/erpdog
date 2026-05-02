@@ -48,6 +48,7 @@ https://codywiki.github.io/erpdog/
 - `docs/plans/2026-04-30-phase-0-implementation.md`：Phase 0 实施清单。
 - `docs/plans/2026-04-30-business-core-implementation.md`：业务核心闭环实现记录。
 - `docs/process/code-review.md`：代码审查流程、质量门禁和合并策略。
+- `docs/process/formal-operations.md`：正式部署启用、月度业务流程和角色分工。
 
 ## 当前业务能力
 
@@ -73,6 +74,10 @@ pnpm audit --audit-level moderate
 ```
 
 PR 会自动触发 `Code Review Gate` 工作流，并使用 `.github/pull_request_template.md` 中的业务、权限、金额、锁账和用户体验清单完成审查。
+
+## 正式使用
+
+GitHub Pages 预览只用于查看界面和演示数据。实际业务使用需要部署完整 Web、API、Worker、PostgreSQL、Redis 和对象存储，并把 Web 的 `NEXT_PUBLIC_API_URL` 指向生产 API。上线后按 `docs/process/formal-operations.md` 的步骤完成初始化、客户合同导入、月度账单、开票收款、成本付款和锁账流程。
 
 ## 预览数据
 
