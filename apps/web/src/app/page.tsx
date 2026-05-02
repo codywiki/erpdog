@@ -149,9 +149,10 @@ const demoUser: ApiUser = {
   permissions: ["demo"],
 };
 
-const apiBase =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ??
-  "http://localhost:4000/api/v1";
+const configuredApiBase = process.env.NEXT_PUBLIC_API_URL?.trim();
+const apiBase = configuredApiBase
+  ? configuredApiBase.replace(/\/$/, "")
+  : "/api/v1";
 
 const modules = [
   { id: "dashboard", label: "经营总览", title: "经营驾驶舱" },
@@ -421,7 +422,7 @@ export default function Home() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [profits, setProfits] = useState<ProfitRow[]>([]);
   const [email, setEmail] = useState("admin@erpdog.local");
-  const [password, setPassword] = useState("ChangeMe123!");
+  const [password, setPassword] = useState("");
   const [periodMonth, setPeriodMonth] = useState("2026-04");
   const [customerCode, setCustomerCode] = useState("CUST-001");
   const [customerName, setCustomerName] = useState("示例客户");
@@ -978,11 +979,12 @@ export default function Home() {
 
         <section className="mode-banner">
           <strong>
-            {demoMode ? "当前是静态演示" : "正式使用需要连接后端 API"}
+            {demoMode ? "当前是静态演示" : "当前连接正式后端 API"}
           </strong>
           <span>
-            GitHub Pages 只负责预览界面。正式业务需要 Web、API、Worker、
-            PostgreSQL、Redis 和对象存储一起部署。
+            {demoMode
+              ? "演示数据只用于理解流程，正式业务请退出演示并登录后端账号。"
+              : "登录后会读取真实数据库数据，创建、审核、结账等操作会写入后端系统。"}
           </span>
         </section>
 
@@ -1002,6 +1004,7 @@ export default function Home() {
                 <input
                   autoComplete="current-password"
                   onChange={(event) => setPassword(event.target.value)}
+                  placeholder="输入管理员或内部用户密码"
                   type="password"
                   value={password}
                 />
@@ -1248,8 +1251,10 @@ function ActivationModule({
             <strong>{demoMode ? "静态预览" : "正式入口"}</strong>
           </div>
           <div>
-            <span>生产建议</span>
-            <strong>不要把 GitHub Pages 当作正式后端</strong>
+            <span>生产状态</span>
+            <strong>
+              {demoMode ? "等待连接正式后端" : "已连接 Web/API/Worker/数据库"}
+            </strong>
           </div>
         </div>
       </div>
