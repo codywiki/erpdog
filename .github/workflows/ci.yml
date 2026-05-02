@@ -59,6 +59,7 @@ jobs:
 
       - name: Run business e2e
         run: |
+          set +e
           set -o pipefail
           corepack pnpm test:e2e 2>&1 | tee /tmp/business-e2e.log
           status=${PIPESTATUS[0]}
