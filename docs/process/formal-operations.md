@@ -35,6 +35,7 @@ NEXT_PUBLIC_API_URL=https://api.example.com/api/v1
 - Create named accounts for every internal user instead of sharing the administrator account.
 - Assign users to the closest built-in role: 管理员, 老板, 财务, or 客户负责人.
 - Keep at least one active administrator account at all times.
+- Customer owners are the backend data boundary. Organization-wide roles should assign owners through the customer owner API before handing work to customer managers.
 - Review 最近审计 after configuration changes, payment approvals, period close, and period reopen.
 - Customer owners should only see their own customers; finance and administrators can see organization-wide finance data.
 
@@ -67,4 +68,10 @@ Use one billing period at a time:
 - Do not edit a closed period unless an administrator reopens it with a clear reason.
 - Do not use demo data for real reconciliation.
 - Every manual adjustment must include a reason and should be backed by customer evidence.
+- Contract charge items already used by bills must not be edited directly. Deactivate the old item and create a new one.
+- Draft extra charges may be cancelled before billing; charges already included in bills must be corrected through bill adjustment.
+- Payment requests can be cancelled only before any payment is registered.
+- Payments created from an approved payment request should allocate to the request's payables; the backend auto-allocates when no explicit allocation is supplied.
+- Attachments should be linked to their owner object so backend permission checks can protect customer-scoped files.
 - Month-end should not close until receivables, payables, and profit reports have been reviewed.
+- Period close is blocked while the period has unconfirmed bills, draft extra charges, or unfinished payment requests.

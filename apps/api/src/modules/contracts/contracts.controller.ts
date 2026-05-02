@@ -98,4 +98,26 @@ export class ContractsController {
   ) {
     return this.contracts.addChargeItem(user, id, body);
   }
+
+  @Patch(":id/charge-items/:itemId")
+  @RequirePermissions(PERMISSION_CODES.CONTRACT_WRITE)
+  updateChargeItem(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("itemId") itemId: string,
+    @Body() body: Payload,
+  ) {
+    return this.contracts.updateChargeItem(user, id, itemId, body);
+  }
+
+  @Post(":id/charge-items/:itemId/deactivate")
+  @RequirePermissions(PERMISSION_CODES.CONTRACT_WRITE)
+  deactivateChargeItem(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Param("itemId") itemId: string,
+    @Body() body: Payload,
+  ) {
+    return this.contracts.deactivateChargeItem(user, id, itemId, body);
+  }
 }

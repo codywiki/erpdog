@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { ChargeItemKind, ContractStatus, Prisma } from "@prisma/client";
 
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
@@ -179,6 +183,113 @@ export class ContractsService {
     return item;
   }
 
+  async updateChargeItem(
+    user: AuthenticatedUser,
+    contractId: string,
+    itemId: string,
+    rawBody: unknown,
+  ) {
+    const contract = await this.get(user, contractId);
+    const before = await this.prisma.contractChargeItem.findFirst({
+      where: { id: itemId, contractId: contract.id },
+    });
+    if (!before) {
+      throw new NotFoundException("Contract charge item not found.");
+    }
+
+    await this.ensureChargeItemEditable(contract.id, itemId);
+    const body = bodyObject(rawBody);
+    const updated = await this.prisma.contractChargeItem.update({
+      where: { id: itemId },
+      data: {
+        name: optionalString(body, "name") ?? before.name,
+        kind: this.kind(body, before.kind),
+        amount:
+          body.amount === undefined ? before.amount : decimal(body.amount),
+        quantity:
+          body.quantity === undefined
+            ? before.quantity
+            : optionalDecimal(body.quantity, before.quantity),
+        unit:
+          body.unit === null
+            ? null
+            : (optionalString(body, "unit") ?? before.unit),
+        description:
+          body.description === null
+            ? null
+            : (optionalString(body, "description") ?? before.description),
+        startsAt:
+          body.startsAt === null
+            ? null
+            : (optionalDate(body, "startsAt") ?? before.startsAt),
+        endsAt:
+          body.endsAt === null
+            ? null
+            : (optionalDate(body, "endsAt") ?? before.endsAt),
+        isActive: booleanField(body, "isActive", before.isActive),
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "contract.charge_item.update",
+      entityType: "contract",
+      entityId: contract.id,
+      before: {
+        id: before.id,
+        name: before.name,
+        amount: before.amount.toString(),
+        isActive: before.isActive,
+      },
+      after: {
+        id: updated.id,
+        name: updated.name,
+        amount: updated.amount.toString(),
+        isActive: updated.isActive,
+      },
+    });
+
+    return updated;
+  }
+
+  async deactivateChargeItem(
+    user: AuthenticatedUser,
+    contractId: string,
+    itemId: string,
+    rawBody: unknown,
+  ) {
+    const contract = await this.get(user, contractId);
+    const body = bodyObject(rawBody);
+    const before = await this.prisma.contractChargeItem.findFirst({
+      where: { id: itemId, contractId: contract.id },
+    });
+    if (!before) {
+      throw new NotFoundException("Contract charge item not found.");
+    }
+
+    const updated = await this.prisma.contractChargeItem.update({
+      where: { id: itemId },
+      data: {
+        isActive: false,
+        endsAt: optionalDate(body, "endsAt") ?? before.endsAt ?? new Date(),
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "contract.charge_item.deactivate",
+      entityType: "contract",
+      entityId: contract.id,
+      before: { id: before.id, isActive: before.isActive },
+      after: { id: updated.id, isActive: updated.isActive },
+      reason: optionalString(body, "reason"),
+    });
+
+    return updated;
+  }
+
   async importContracts(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
     const rows = arrayField<Payload>(body, "rows");
@@ -267,6 +378,17 @@ export class ContractsService {
       endsAt: optionalDate(body, "endsAt"),
       isActive: booleanField(body, "isActive", true),
     };
+  }
+
+  private async ensureChargeItemEditable(contractId: string, itemId: string) {
+    const billItemCount = await this.prisma.billItem.count({
+      where: { contractChargeItemId: itemId, bill: { contractId } },
+    });
+    if (billItemCount > 0) {
+      throw new ConflictException(
+        "Charge items already used by bills cannot be edited directly. Deactivate it and add a new charge item instead.",
+      );
+    }
   }
 
   private contractInclude() {

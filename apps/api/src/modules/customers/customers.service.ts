@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -80,10 +81,12 @@ export class CustomersService {
   async create(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
     const ownerUserIds = this.ownerIds(body, user);
+    this.ensureOwnerAssignmentAllowed(user, ownerUserIds);
     const contacts = arrayField<Payload>(body, "contacts");
     const billingProfiles = arrayField<Payload>(body, "billingProfiles");
 
     const customer = await this.prisma.$transaction(async (tx) => {
+      await this.ensureUsersInOrg(tx, user.orgId, ownerUserIds);
       const created = await tx.customer.create({
         data: {
           orgId: user.orgId,
@@ -153,6 +156,72 @@ export class CustomersService {
       entityId: id,
       before: { code: before.code, name: before.name, status: before.status },
       after: { code: updated.code, name: updated.name, status: updated.status },
+    });
+
+    return updated;
+  }
+
+  async setOwners(
+    user: AuthenticatedUser,
+    customerId: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const before = await this.ensureCustomerAccess(user, customerId);
+    if (!this.canReadAll(user)) {
+      throw new ForbiddenException(
+        "Only organization-wide roles can reassign customer owners.",
+      );
+    }
+    const ownerUserIds = this.ownerIds(body, user);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.ensureUsersInOrg(tx, user.orgId, ownerUserIds);
+      const previousOwners = await tx.customerOwner.findMany({
+        where: { customerId },
+        include: { user: { select: { id: true, email: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      });
+
+      await tx.customerOwner.deleteMany({ where: { customerId } });
+      await tx.customerOwner.createMany({
+        data: ownerUserIds.map((userId, index) => ({
+          customerId,
+          userId,
+          isPrimary: index === 0,
+        })),
+      });
+
+      const nextCustomer = await tx.customer.findUniqueOrThrow({
+        where: { id: customerId },
+        include: this.customerInclude(),
+      });
+
+      await tx.auditLog.create({
+        data: {
+          orgId: user.orgId,
+          actorUserId: user.id,
+          action: "customer.owners.set",
+          entityType: "customer",
+          entityId: customerId,
+          before: {
+            code: before.code,
+            owners: previousOwners.map((owner) => ({
+              userId: owner.userId,
+              name: owner.user.name,
+            })),
+          },
+          after: {
+            code: nextCustomer.code,
+            owners: nextCustomer.owners.map((owner) => ({
+              userId: owner.userId,
+              name: owner.user.name,
+            })),
+          },
+        },
+      });
+
+      return nextCustomer;
     });
 
     return updated;
@@ -295,8 +364,49 @@ export class CustomersService {
   }
 
   private ownerIds(body: Payload, user: AuthenticatedUser) {
-    const requested = arrayField<string>(body, "ownerUserIds").filter(Boolean);
+    const requested = Array.from(
+      new Set(
+        arrayField<unknown>(body, "ownerUserIds")
+          .map((id) => (typeof id === "string" ? id.trim() : ""))
+          .filter(Boolean),
+      ),
+    );
     return requested.length ? requested : [user.id];
+  }
+
+  private ensureOwnerAssignmentAllowed(
+    user: AuthenticatedUser,
+    ownerUserIds: string[],
+  ) {
+    if (this.canReadAll(user)) {
+      return;
+    }
+
+    if (ownerUserIds.length !== 1 || ownerUserIds[0] !== user.id) {
+      throw new ForbiddenException(
+        "You can only assign yourself as owner when creating customers.",
+      );
+    }
+  }
+
+  private async ensureUsersInOrg(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+    userIds: string[],
+  ) {
+    if (!userIds.length) {
+      throw new BadRequestException("ownerUserIds is required.");
+    }
+
+    const users = await tx.user.findMany({
+      where: { orgId, id: { in: userIds }, isActive: true },
+      select: { id: true },
+    });
+    if (users.length !== userIds.length) {
+      throw new BadRequestException(
+        "All ownerUserIds must be active users in this organization.",
+      );
+    }
   }
 
   private status(

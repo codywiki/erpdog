@@ -64,6 +64,19 @@ export class FinanceController {
     return this.finance.createExtraCharge(user, body);
   }
 
+  @Post("extra-charges/:id/cancel")
+  @RequirePermissions(
+    PERMISSION_CODES.BILL_MANAGE,
+    PERMISSION_CODES.CONTRACT_WRITE,
+  )
+  cancelExtraCharge(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.finance.cancelExtraCharge(user, id, body);
+  }
+
   @Get("invoices")
   @RequirePermissions(PERMISSION_CODES.INVOICE_MANAGE)
   listInvoices(
@@ -223,6 +236,19 @@ export class FinanceController {
     return this.finance.rejectPaymentRequest(user, id, body);
   }
 
+  @Post("payment-requests/:id/cancel")
+  @RequirePermissions(
+    PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+    PERMISSION_CODES.PAYMENT_REQUEST_APPROVE,
+  )
+  cancelPaymentRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.finance.cancelPaymentRequest(user, id, body);
+  }
+
   @Get("payments")
   @RequirePermissions(PERMISSION_CODES.PAYMENT_PAY)
   listPayments(
@@ -276,10 +302,17 @@ export class FinanceController {
   )
   listAttachments(
     @CurrentUser() user: AuthenticatedUser,
+    @Query("ownerType") ownerType?: string,
+    @Query("ownerId") ownerId?: string,
     @Query("page") page?: string,
     @Query("pageSize") pageSize?: string,
   ) {
-    return this.finance.listAttachments(user, { page, pageSize });
+    return this.finance.listAttachments(user, {
+      ownerType,
+      ownerId,
+      page,
+      pageSize,
+    });
   }
 
   @Post("attachments")

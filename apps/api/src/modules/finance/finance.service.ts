@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -51,6 +52,16 @@ type PeriodCustomerFilters = {
   periodMonth?: string;
   customerId?: string;
 } & PaginationQuery;
+
+type AttachmentFilters = {
+  ownerType?: string;
+  ownerId?: string;
+} & PaginationQuery;
+
+type PaymentAllocationInput = {
+  payableId?: string;
+  amount: Prisma.Decimal;
+};
 
 @Injectable()
 export class FinanceService {
@@ -159,6 +170,50 @@ export class FinanceService {
     });
 
     return charge;
+  }
+
+  async cancelExtraCharge(
+    user: AuthenticatedUser,
+    id: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const charge = await this.prisma.extraCharge.findFirst({
+      where: { id, orgId: user.orgId },
+    });
+    if (!charge) {
+      throw new NotFoundException("Extra charge not found.");
+    }
+
+    await this.customers.ensureCustomerAccess(user, charge.customerId);
+    await this.periodLocks.ensureOpen(user.orgId, charge.periodMonth);
+    if (charge.status !== ExtraChargeStatus.DRAFT) {
+      throw new ConflictException(
+        "Only draft extra charges can be cancelled. Included charges must be corrected through bill adjustment.",
+      );
+    }
+
+    const updated = await this.prisma.extraCharge.update({
+      where: { id },
+      data: {
+        status: ExtraChargeStatus.CANCELLED,
+        description:
+          optionalString(body, "reason") ?? charge.description ?? undefined,
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "extra_charge.cancel",
+      entityType: "extra_charge",
+      entityId: id,
+      before: { status: charge.status },
+      after: { status: updated.status },
+      reason: optionalString(body, "reason"),
+    });
+
+    return updated;
   }
 
   async listInvoices(
@@ -799,6 +854,72 @@ export class FinanceService {
     );
   }
 
+  async cancelPaymentRequest(
+    user: AuthenticatedUser,
+    id: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const reason = stringField(body, "reason", "付款申请取消");
+    const request = await this.prisma.paymentRequest.findFirst({
+      where: { id, orgId: user.orgId },
+      include: { payments: true },
+    });
+    if (!request) {
+      throw new NotFoundException("Payment request not found.");
+    }
+    if (
+      request.status === PaymentRequestStatus.CANCELLED ||
+      request.status === PaymentRequestStatus.PAID ||
+      request.status === PaymentRequestStatus.PARTIALLY_PAID
+    ) {
+      throw new ConflictException(
+        "Paid, partially paid, or cancelled payment requests cannot be cancelled.",
+      );
+    }
+
+    const paidAmount = sum(
+      request.payments
+        .filter((payment) => payment.status !== PaymentStatus.REVERSED)
+        .map((payment) => payment.amount),
+    );
+    if (paidAmount.greaterThan(0)) {
+      throw new ConflictException(
+        "Payment requests with registered payments cannot be cancelled.",
+      );
+    }
+    this.ensurePaymentRequestActionAccess(user, request, "cancel");
+
+    const updated = await this.prisma.paymentRequest.update({
+      where: { id },
+      data: {
+        status: PaymentRequestStatus.CANCELLED,
+        rejectReason: reason,
+        approvals: {
+          create: {
+            approverUserId: user.id,
+            action: "cancel",
+            note: reason,
+          },
+        },
+      },
+      include: { items: true, approvals: true },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "payment_request.cancel",
+      entityType: "payment_request",
+      entityId: id,
+      before: { status: request.status },
+      after: { status: updated.status },
+      reason,
+    });
+
+    return updated;
+  }
+
   async listPayments(
     user: AuthenticatedUser,
     paginationQuery: PaginationQuery = {},
@@ -822,16 +943,16 @@ export class FinanceService {
   async createPayment(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
     const requestId = optionalString(body, "requestId");
-    const allocations = arrayField<Payload>(body, "allocations");
+    const rawAllocations = arrayField<Payload>(body, "allocations");
     const amount = positiveMoney(body.amount);
     const allocationTotal = sum(
-      allocations.map((allocation) => positiveMoney(allocation.amount)),
+      rawAllocations.map((allocation) => positiveMoney(allocation.amount)),
     );
 
-    if (!requestId && !allocations.length) {
+    if (!requestId && !rawAllocations.length) {
       throw new BadRequestException("requestId or allocations is required.");
     }
-    if (allocations.length) {
+    if (rawAllocations.length) {
       assertMoneyEquals(
         allocationTotal,
         amount,
@@ -841,10 +962,20 @@ export class FinanceService {
 
     const payment = await this.prisma.$transaction(
       async (tx) => {
+        let allocations: PaymentAllocationInput[] = rawAllocations.map(
+          (allocation) => ({
+            payableId: optionalString(allocation, "payableId"),
+            amount: positiveMoney(allocation.amount),
+          }),
+        );
+
         if (requestId) {
           const request = await tx.paymentRequest.findFirst({
             where: { id: requestId, orgId: user.orgId },
-            include: { payments: true },
+            include: {
+              items: { include: { payable: true } },
+              payments: { include: { allocations: true } },
+            },
           });
           if (!request) {
             throw new NotFoundException("Payment request not found.");
@@ -865,6 +996,12 @@ export class FinanceService {
           if (paidAmount.plus(amount).greaterThan(request.requestedAmount)) {
             throw new BadRequestException("Payment exceeds request balance.");
           }
+
+          if (!allocations.length) {
+            allocations = this.derivePaymentAllocations(request, amount);
+          } else {
+            this.ensurePaymentAllocationsMatchRequest(request, allocations);
+          }
         }
 
         const created = await tx.payment.create({
@@ -882,8 +1019,8 @@ export class FinanceService {
             attachmentId: optionalString(body, "attachmentId"),
             allocations: {
               create: allocations.map((allocation) => ({
-                payableId: optionalString(allocation, "payableId"),
-                amount: positiveMoney(allocation.amount),
+                payableId: allocation.payableId,
+                amount: allocation.amount,
               })),
             },
           },
@@ -891,13 +1028,12 @@ export class FinanceService {
         });
 
         for (const allocation of allocations) {
-          const payableId = optionalString(allocation, "payableId");
-          if (payableId) {
+          if (allocation.payableId) {
             await this.applyPayablePayment(
               tx,
               user,
-              payableId,
-              positiveMoney(allocation.amount),
+              allocation.payableId,
+              allocation.amount,
             );
           }
         }
@@ -1014,6 +1150,43 @@ export class FinanceService {
         "There are unconfirmed bills in this period.",
       );
     }
+    const [draftExtraCharges, pendingPaymentRequests] = await Promise.all([
+      this.prisma.extraCharge.count({
+        where: {
+          orgId: user.orgId,
+          periodMonth,
+          status: ExtraChargeStatus.DRAFT,
+        },
+      }),
+      this.prisma.paymentRequest.count({
+        where: {
+          orgId: user.orgId,
+          status: {
+            in: [
+              PaymentRequestStatus.DRAFT,
+              PaymentRequestStatus.SUBMITTED,
+              PaymentRequestStatus.APPROVED,
+              PaymentRequestStatus.PARTIALLY_PAID,
+            ],
+          },
+          OR: [
+            { periodMonth },
+            { items: { some: { periodMonth } } },
+            { items: { some: { payable: { periodMonth } } } },
+          ],
+        },
+      }),
+    ]);
+    if (draftExtraCharges > 0) {
+      throw new ConflictException(
+        "There are draft extra charges not included in bills.",
+      );
+    }
+    if (pendingPaymentRequests > 0) {
+      throw new ConflictException(
+        "There are unfinished payment requests in this period.",
+      );
+    }
 
     const snapshot = await this.periodSnapshot(user.orgId, periodMonth);
     const period = await this.prisma.$transaction(async (tx) => {
@@ -1108,10 +1281,18 @@ export class FinanceService {
 
   async listAttachments(
     user: AuthenticatedUser,
-    paginationQuery: PaginationQuery = {},
+    filters: AttachmentFilters = {},
   ) {
-    const where: Prisma.AttachmentWhereInput = { orgId: user.orgId };
-    const pagination = parsePagination(paginationQuery);
+    const where: Prisma.AttachmentWhereInput = {
+      orgId: user.orgId,
+      ...(filters.ownerType ? { ownerType: filters.ownerType } : {}),
+      ...(filters.ownerId ? { ownerId: filters.ownerId } : {}),
+    };
+    if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
+      where.uploadedById = user.id;
+    }
+
+    const pagination = parsePagination(filters);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.attachment.findMany({
         where,
@@ -1127,11 +1308,15 @@ export class FinanceService {
 
   async createAttachment(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
+    const ownerType = optionalString(body, "ownerType");
+    const ownerId = optionalString(body, "ownerId");
+    await this.ensureAttachmentOwnerAccess(user, ownerType, ownerId);
+
     const attachment = await this.prisma.attachment.create({
       data: {
         orgId: user.orgId,
-        ownerType: optionalString(body, "ownerType"),
-        ownerId: optionalString(body, "ownerId"),
+        ownerType,
+        ownerId,
         fileName: stringField(body, "fileName"),
         contentType: optionalString(body, "contentType"),
         sizeBytes:
@@ -1283,6 +1468,7 @@ export class FinanceService {
     if (!request) {
       throw new NotFoundException("Payment request not found.");
     }
+    this.ensurePaymentRequestActionAccess(user, request, action);
 
     if (
       status === PaymentRequestStatus.SUBMITTED &&
@@ -1432,6 +1618,157 @@ export class FinanceService {
     });
   }
 
+  private derivePaymentAllocations(
+    request: Prisma.PaymentRequestGetPayload<{
+      include: {
+        items: { include: { payable: true } };
+        payments: { include: { allocations: true } };
+      };
+    }>,
+    amount: Prisma.Decimal,
+  ): PaymentAllocationInput[] {
+    const requestedByPayable = new Map<string, Prisma.Decimal>();
+    for (const item of request.items) {
+      if (!item.payableId) {
+        continue;
+      }
+      requestedByPayable.set(
+        item.payableId,
+        (requestedByPayable.get(item.payableId) ?? new Prisma.Decimal(0)).plus(
+          item.amount,
+        ),
+      );
+    }
+
+    if (!requestedByPayable.size) {
+      return [];
+    }
+
+    const paidByPayable = new Map<string, Prisma.Decimal>();
+    for (const payment of request.payments) {
+      if (payment.status === PaymentStatus.REVERSED) {
+        continue;
+      }
+      for (const allocation of payment.allocations) {
+        if (!allocation.payableId) {
+          continue;
+        }
+        paidByPayable.set(
+          allocation.payableId,
+          (
+            paidByPayable.get(allocation.payableId) ?? new Prisma.Decimal(0)
+          ).plus(allocation.amount),
+        );
+      }
+    }
+
+    const remainingRequestByPayable = new Map(requestedByPayable);
+    for (const [payableId, paidAmount] of paidByPayable) {
+      remainingRequestByPayable.set(
+        payableId,
+        (
+          remainingRequestByPayable.get(payableId) ?? new Prisma.Decimal(0)
+        ).minus(paidAmount),
+      );
+    }
+
+    const allocations: PaymentAllocationInput[] = [];
+    let remaining = amount;
+    for (const item of request.items) {
+      if (!item.payableId || !item.payable) {
+        continue;
+      }
+
+      const requestBalance =
+        remainingRequestByPayable.get(item.payableId) ?? new Prisma.Decimal(0);
+      const payableBalance = item.payable.amount.minus(item.payable.paidAmount);
+      const nextAmount = Prisma.Decimal.min(
+        remaining,
+        requestBalance,
+        payableBalance,
+      );
+      if (nextAmount.greaterThan(0)) {
+        allocations.push({
+          payableId: item.payableId,
+          amount: nextAmount,
+        });
+        remaining = remaining.minus(nextAmount);
+        remainingRequestByPayable.set(
+          item.payableId,
+          requestBalance.minus(nextAmount),
+        );
+      }
+      if (remaining.isZero()) {
+        break;
+      }
+    }
+
+    if (remaining.greaterThan(0)) {
+      throw new BadRequestException(
+        "Payment amount cannot be fully allocated to request payables.",
+      );
+    }
+
+    return allocations;
+  }
+
+  private ensurePaymentAllocationsMatchRequest(
+    request: Prisma.PaymentRequestGetPayload<{
+      include: {
+        items: { include: { payable: true } };
+        payments: { include: { allocations: true } };
+      };
+    }>,
+    allocations: PaymentAllocationInput[],
+  ) {
+    const requestedPayableIds = new Set(
+      request.items
+        .map((item) => item.payableId)
+        .filter((payableId): payableId is string => Boolean(payableId)),
+    );
+    if (!requestedPayableIds.size) {
+      return;
+    }
+
+    for (const allocation of allocations) {
+      if (
+        !allocation.payableId ||
+        !requestedPayableIds.has(allocation.payableId)
+      ) {
+        throw new BadRequestException(
+          "Payment allocations must match payables in the payment request.",
+        );
+      }
+    }
+  }
+
+  private ensurePaymentRequestActionAccess(
+    user: AuthenticatedUser,
+    request: {
+      applicantUserId: string | null;
+      customerId: string | null;
+    },
+    action: string,
+  ) {
+    if (
+      user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL) ||
+      user.permissions.includes(PERMISSION_CODES.PAYMENT_REQUEST_APPROVE)
+    ) {
+      return;
+    }
+
+    if (
+      (action === "submit" || action === "cancel") &&
+      request.applicantUserId === user.id
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      "You can only change payment requests that you created.",
+    );
+  }
+
   private async reversePayablePayment(
     tx: Prisma.TransactionClient,
     user: AuthenticatedUser,
@@ -1557,6 +1894,92 @@ export class FinanceService {
     if (!category) {
       throw new NotFoundException("Cost category not found.");
     }
+  }
+
+  private async ensureAttachmentOwnerAccess(
+    user: AuthenticatedUser,
+    ownerType?: string,
+    ownerId?: string,
+  ) {
+    if (!ownerType && !ownerId) {
+      return;
+    }
+    if (!ownerType || !ownerId) {
+      throw new BadRequestException(
+        "ownerType and ownerId must be provided together.",
+      );
+    }
+    if (user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
+      return;
+    }
+
+    if (ownerType === "customer") {
+      await this.customers.ensureCustomerAccess(user, ownerId);
+      return;
+    }
+
+    if (ownerType === "contract") {
+      const contract = await this.prisma.contract.findFirst({
+        where: { id: ownerId, orgId: user.orgId },
+      });
+      if (!contract) {
+        throw new NotFoundException("Contract not found.");
+      }
+      await this.customers.ensureCustomerAccess(user, contract.customerId);
+      return;
+    }
+
+    if (ownerType === "bill") {
+      const bill = await this.prisma.bill.findFirst({
+        where: { id: ownerId, orgId: user.orgId },
+      });
+      if (!bill) {
+        throw new NotFoundException("Bill not found.");
+      }
+      await this.customers.ensureCustomerAccess(user, bill.customerId);
+      return;
+    }
+
+    if (ownerType === "cost_entry") {
+      const cost = await this.prisma.costEntry.findFirst({
+        where: { id: ownerId, orgId: user.orgId },
+      });
+      if (!cost) {
+        throw new NotFoundException("Cost entry not found.");
+      }
+      await this.customers.ensureCustomerAccess(user, cost.customerId);
+      return;
+    }
+
+    if (ownerType === "payable") {
+      const payable = await this.prisma.payable.findFirst({
+        where: { id: ownerId, orgId: user.orgId },
+      });
+      if (!payable) {
+        throw new NotFoundException("Payable not found.");
+      }
+      if (payable.customerId) {
+        await this.customers.ensureCustomerAccess(user, payable.customerId);
+      }
+      return;
+    }
+
+    if (ownerType === "payment_request") {
+      const request = await this.prisma.paymentRequest.findFirst({
+        where: { id: ownerId, orgId: user.orgId },
+      });
+      if (!request) {
+        throw new NotFoundException("Payment request not found.");
+      }
+      if (request.applicantUserId !== user.id && request.customerId) {
+        await this.customers.ensureCustomerAccess(user, request.customerId);
+      }
+      return;
+    }
+
+    throw new BadRequestException(
+      "Unsupported attachment ownerType for this role.",
+    );
   }
 
   private async refreshPaymentRequestStatus(

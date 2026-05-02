@@ -71,6 +71,16 @@ export class CustomersController {
     return this.customers.update(user, id, body);
   }
 
+  @Post(":id/owners")
+  @RequirePermissions(PERMISSION_CODES.CUSTOMER_WRITE)
+  setOwners(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.customers.setOwners(user, id, body);
+  }
+
   @Post(":id/contacts")
   @RequirePermissions(PERMISSION_CODES.CUSTOMER_WRITE)
   addContact(
