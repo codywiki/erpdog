@@ -149,6 +149,8 @@ const demoUser: ApiUser = {
   permissions: ["demo"],
 };
 
+const authExpiredMessage = "登录已过期，请重新登录。";
+
 const configuredApiBase = process.env.NEXT_PUBLIC_API_URL?.trim();
 const apiBase = configuredApiBase
   ? configuredApiBase.replace(/\/$/, "")
@@ -192,6 +194,24 @@ function listItems<T>(value: T[] | PaginatedResponse<T>) {
 
 function emptyPage<T>(): PaginatedResponse<T> {
   return { items: [], page: 1, pageSize: 50, total: 0, totalPages: 0 };
+}
+
+function emptyConsoleData(): ConsoleData {
+  return {
+    customers: [],
+    contracts: [],
+    bills: [],
+    invoices: [],
+    receipts: [],
+    costEntries: [],
+    payables: [],
+    paymentRequests: [],
+    payments: [],
+    users: [],
+    roles: [],
+    auditLogs: [],
+    profits: [],
+  };
 }
 
 function dateText(value: string | undefined | null) {
@@ -551,22 +571,41 @@ export default function Home() {
     setMessage("静态预览：演示数据只用于理解流程");
   }
 
-  async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  function resetSession(message = authExpiredMessage) {
+    setDemoMode(false);
+    setToken("");
+    setUser(null);
+    applyConsoleData(emptyConsoleData());
+    setMessage(message);
+  }
+
+  async function request<T>(
+    path: string,
+    init?: RequestInit,
+    options: { auth?: boolean } = {},
+  ): Promise<T> {
     if (demoMode) {
       throw new Error("演示模式不会写入后端；正式使用请连接 API 后登录");
     }
 
+    const useAuth = options.auth ?? true;
     const response = await fetch(`${apiBase}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(useAuth && token ? { Authorization: `Bearer ${token}` } : {}),
         ...init?.headers,
       },
     });
 
     if (!response.ok) {
-      throw new Error(await responseMessage(response));
+      const message = await responseMessage(response);
+      if (useAuth && response.status === 401) {
+        resetSession();
+        throw new Error(authExpiredMessage);
+      }
+
+      throw new Error(message);
     }
 
     return (await response.json()) as T;
@@ -593,7 +632,13 @@ export default function Home() {
         headers: authHeader,
       });
       if (!response.ok) {
-        throw new Error(await responseMessage(response));
+        const message = await responseMessage(response);
+        if (response.status === 401) {
+          resetSession();
+          throw new Error(authExpiredMessage);
+        }
+
+        throw new Error(message);
       }
 
       return (await response.json()) as TValue;
@@ -706,10 +751,14 @@ export default function Home() {
       const result = await request<{
         accessToken: string;
         user: ApiUser;
-      }>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      });
+      }>(
+        "/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify({ email, password }),
+        },
+        { auth: false },
+      );
       setDemoMode(false);
       setToken(result.accessToken);
       setUser(result.user);
