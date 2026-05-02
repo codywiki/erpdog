@@ -11,7 +11,11 @@ import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 import { AuditService } from "../../common/audit/audit.service";
 import { ExcelService } from "../../common/excel/excel.service";
 import { PrismaService } from "../../common/prisma/prisma.service";
-import { decimal, optionalDecimal } from "../../common/utils/finance";
+import {
+  decimal,
+  nonNegativeMoney,
+  optionalDecimal,
+} from "../../common/utils/finance";
 import {
   paginated,
   parsePagination,
@@ -88,7 +92,11 @@ export class ContractsService {
       this.prisma.contract.count({ where }),
     ]);
 
-    return paginated(items, total, pagination);
+    return paginated(
+      items.map((contract) => this.presentContract(contract)),
+      total,
+      pagination,
+    );
   }
 
   async get(user: AuthenticatedUser, id: string) {
@@ -102,7 +110,7 @@ export class ContractsService {
     }
 
     await this.customers.ensureCustomerAccess(user, contract.customerId);
-    return contract;
+    return this.presentContract(contract);
   }
 
   async create(user: AuthenticatedUser, rawBody: unknown) {
@@ -110,24 +118,36 @@ export class ContractsService {
     const customerId = stringField(body, "customerId");
     await this.customers.ensureCustomerAccess(user, customerId);
     const chargeItems = arrayField<Payload>(body, "chargeItems");
+    const startDate = dateField(body, "startDate");
+    const endDate = optionalDate(body, "endDate");
 
-    const contract = await this.prisma.contract.create({
-      data: {
-        orgId: user.orgId,
-        customerId,
-        code: stringField(body, "code"),
-        name: stringField(body, "name"),
-        status: this.status(body),
-        startDate: dateField(body, "startDate"),
-        endDate: optionalDate(body, "endDate"),
-        billingDay: intField(body, "billingDay", 1),
-        currency: stringField(body, "currency", "CNY"),
-        notes: optionalString(body, "notes"),
-        chargeItems: {
-          create: chargeItems.map((item) => this.chargeItemData(item)),
+    const contract = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.contract.create({
+        data: {
+          orgId: user.orgId,
+          customerId,
+          code: stringField(body, "code"),
+          name: stringField(body, "name"),
+          status: this.statusFromPeriod(startDate, endDate),
+          startDate,
+          endDate,
+          billingDay: intField(body, "billingDay", 1),
+          currency: stringField(body, "currency", "CNY"),
+          notes: optionalString(body, "notes"),
+          ...this.commercialTermsData(body),
+          chargeItems: {
+            create: this.contractChargeItems(body, chargeItems),
+          },
         },
-      },
-      include: this.contractInclude(),
+        include: this.contractInclude(),
+      });
+
+      await this.attachFiles(tx, user, created.id, body);
+
+      return tx.contract.findUniqueOrThrow({
+        where: { id: created.id },
+        include: this.contractInclude(),
+      });
     });
 
     await this.audit.log({
@@ -143,29 +163,48 @@ export class ContractsService {
       },
     });
 
-    return contract;
+    return this.presentContract(contract);
   }
 
   async update(user: AuthenticatedUser, id: string, rawBody: unknown) {
     const before = await this.get(user, id);
     const body = bodyObject(rawBody);
+    const customerId = optionalString(body, "customerId") ?? before.customerId;
+    await this.customers.ensureCustomerAccess(user, customerId);
+    const startDate = optionalDate(body, "startDate") ?? before.startDate;
+    const endDate =
+      body.endDate === null
+        ? null
+        : (optionalDate(body, "endDate") ?? before.endDate);
 
-    const updated = await this.prisma.contract.update({
-      where: { id },
-      data: {
-        code: optionalString(body, "code") ?? before.code,
-        name: optionalString(body, "name") ?? before.name,
-        status: this.status(body, before.status),
-        startDate: optionalDate(body, "startDate") ?? before.startDate,
-        endDate:
-          body.endDate === null
-            ? null
-            : (optionalDate(body, "endDate") ?? before.endDate),
-        billingDay: intField(body, "billingDay", before.billingDay),
-        currency: optionalString(body, "currency") ?? before.currency,
-        notes: optionalString(body, "notes") ?? before.notes,
-      },
-      include: this.contractInclude(),
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.contract.update({
+        where: { id },
+        data: {
+          customerId,
+          code: optionalString(body, "code") ?? before.code,
+          name: optionalString(body, "name") ?? before.name,
+          status: this.statusFromPeriod(startDate, endDate),
+          startDate,
+          endDate,
+          billingDay: intField(body, "billingDay", before.billingDay),
+          currency: optionalString(body, "currency") ?? before.currency,
+          notes:
+            body.notes === null
+              ? null
+              : (optionalString(body, "notes") ?? before.notes),
+          ...this.commercialTermsData(body),
+        },
+        include: this.contractInclude(),
+      });
+
+      await this.syncBaseFeeChargeItem(tx, id, body);
+      await this.attachFiles(tx, user, id, body);
+
+      return tx.contract.findUniqueOrThrow({
+        where: { id },
+        include: this.contractInclude(),
+      });
     });
 
     await this.audit.log({
@@ -178,7 +217,7 @@ export class ContractsService {
       after: { code: updated.code, status: updated.status },
     });
 
-    return updated;
+    return this.presentContract(updated);
   }
 
   async addChargeItem(
@@ -458,16 +497,6 @@ export class ContractsService {
     return template;
   }
 
-  private status(
-    body: Payload,
-    fallback: ContractStatus = ContractStatus.DRAFT,
-  ): ContractStatus {
-    const value = optionalString(body, "status");
-    return value && value in ContractStatus
-      ? (value as ContractStatus)
-      : fallback;
-  }
-
   private kind(
     body: Payload,
     fallback: ChargeItemKind = ChargeItemKind.FIXED,
@@ -492,6 +521,277 @@ export class ContractsService {
     };
   }
 
+  private contractChargeItems(body: Payload, chargeItems: Payload[]) {
+    if (chargeItems.length > 0) {
+      return chargeItems.map((item) => this.chargeItemData(item));
+    }
+
+    const baseFee = this.optionalMoney(body, "baseFee");
+    if (baseFee === undefined || baseFee === null) {
+      return [];
+    }
+
+    return [
+      {
+        name: "基础服务费",
+        kind: ChargeItemKind.FIXED,
+        amount: baseFee,
+        quantity: new Prisma.Decimal(1),
+        unit: "月",
+        description: "合同基础费用",
+        startsAt: undefined,
+        endsAt: undefined,
+        isActive: true,
+      },
+    ];
+  }
+
+  private async syncBaseFeeChargeItem(
+    tx: Prisma.TransactionClient,
+    contractId: string,
+    body: Payload,
+  ) {
+    const baseFee = this.optionalMoney(body, "baseFee");
+    if (baseFee === undefined || baseFee === null) {
+      return;
+    }
+
+    const item =
+      (await tx.contractChargeItem.findFirst({
+        where: {
+          contractId,
+          name: "基础服务费",
+          kind: ChargeItemKind.FIXED,
+          isActive: true,
+        },
+        orderBy: { createdAt: "asc" },
+      })) ??
+      (await tx.contractChargeItem.findFirst({
+        where: { contractId, kind: ChargeItemKind.FIXED, isActive: true },
+        orderBy: { createdAt: "asc" },
+      }));
+
+    if (!item) {
+      await tx.contractChargeItem.create({
+        data: {
+          contractId,
+          name: "基础服务费",
+          kind: ChargeItemKind.FIXED,
+          amount: baseFee,
+          quantity: new Prisma.Decimal(1),
+          unit: "月",
+          description: "合同基础费用",
+        },
+      });
+      return;
+    }
+
+    const billItemCount = await tx.billItem.count({
+      where: { contractChargeItemId: item.id, bill: { contractId } },
+    });
+    if (billItemCount > 0) {
+      await tx.contractChargeItem.update({
+        where: { id: item.id },
+        data: {
+          isActive: false,
+          endsAt: new Date(),
+        },
+      });
+      await tx.contractChargeItem.create({
+        data: {
+          contractId,
+          name: "基础服务费",
+          kind: ChargeItemKind.FIXED,
+          amount: baseFee,
+          quantity: new Prisma.Decimal(1),
+          unit: "月",
+          description: "合同基础费用",
+        },
+      });
+      return;
+    }
+
+    await tx.contractChargeItem.update({
+      where: { id: item.id },
+      data: {
+        name: "基础服务费",
+        amount: baseFee,
+        quantity: new Prisma.Decimal(1),
+        unit: "月",
+        description: "合同基础费用",
+      },
+    });
+  }
+
+  private commercialTermsData(body: Payload) {
+    const baseFee = this.optionalMoney(body, "baseFee");
+    const incentiveUnitPrice = this.optionalMoney(body, "incentiveUnitPrice");
+    const serviceFeeRate = this.optionalRate(body, "serviceFeeRate");
+    const tierMode = this.tierMode(body);
+    const tierRules = this.tierRules(body, tierMode);
+
+    return {
+      ...(baseFee !== undefined ? { baseFee } : {}),
+      ...(incentiveUnitPrice !== undefined ? { incentiveUnitPrice } : {}),
+      ...(serviceFeeRate !== undefined ? { serviceFeeRate } : {}),
+      ...(tierMode !== undefined ? { tierMode } : {}),
+      ...(tierRules !== undefined ? { tierRules } : {}),
+    };
+  }
+
+  private optionalMoney(body: Payload, field: string) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) {
+      return undefined;
+    }
+
+    const value = body[field];
+    if (value === null || value === "") {
+      return null;
+    }
+
+    return nonNegativeMoney(value, field);
+  }
+
+  private optionalRate(body: Payload, field: string) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) {
+      return undefined;
+    }
+
+    const value = body[field];
+    if (value === null || value === "") {
+      return null;
+    }
+
+    const parsed = decimal(value, field);
+    if (!parsed.isFinite() || parsed.lessThan(0) || parsed.greaterThan(100)) {
+      throw new BadRequestException(`${field} must be between 0 and 100.`);
+    }
+
+    if (parsed.decimalPlaces() > 4) {
+      throw new BadRequestException(`${field} must have at most 4 decimals.`);
+    }
+
+    return parsed.toDecimalPlaces(4);
+  }
+
+  private tierMode(body: Payload) {
+    if (!Object.prototype.hasOwnProperty.call(body, "tierMode")) {
+      return undefined;
+    }
+
+    const value = optionalString(body, "tierMode");
+    if (!value) {
+      return null;
+    }
+
+    if (!["ACCUMULATE", "FULL_COVERAGE"].includes(value)) {
+      throw new BadRequestException(
+        "tierMode must be ACCUMULATE or FULL_COVERAGE.",
+      );
+    }
+
+    return value;
+  }
+
+  private tierRules(body: Payload, tierMode?: string | null) {
+    if (!Object.prototype.hasOwnProperty.call(body, "tierRules")) {
+      return undefined;
+    }
+
+    const value = body.tierRules;
+    if (value === null) {
+      return Prisma.JsonNull;
+    }
+
+    if (!Array.isArray(value)) {
+      throw new BadRequestException("tierRules must be an array.");
+    }
+
+    if (value.length > 0 && !tierMode) {
+      throw new BadRequestException(
+        "tierMode is required when tierRules are configured.",
+      );
+    }
+
+    return value.map((rule, index) => {
+      if (!rule || typeof rule !== "object" || Array.isArray(rule)) {
+        throw new BadRequestException(`tierRules[${index}] must be an object.`);
+      }
+
+      const payload = rule as Payload;
+      const threshold = nonNegativeMoney(
+        payload.threshold,
+        `tierRules[${index}].threshold`,
+      );
+      const serviceFeeRate = this.optionalRate(
+        { serviceFeeRate: payload.serviceFeeRate },
+        "serviceFeeRate",
+      );
+      if (serviceFeeRate === undefined || serviceFeeRate === null) {
+        throw new BadRequestException(
+          `tierRules[${index}].serviceFeeRate is required.`,
+        );
+      }
+
+      return {
+        threshold: threshold.toFixed(2),
+        serviceFeeRate: serviceFeeRate.toFixed(4),
+      };
+    }) satisfies Prisma.InputJsonValue;
+  }
+
+  private statusFromPeriod(
+    startDate: Date,
+    endDate?: Date | null,
+  ): ContractStatus {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (endDate && endDate < today) {
+      return ContractStatus.TERMINATED;
+    }
+
+    return ContractStatus.ACTIVE;
+  }
+
+  private presentContract<T extends { startDate: Date; endDate: Date | null }>(
+    contract: T,
+  ) {
+    return {
+      ...contract,
+      status: this.statusFromPeriod(contract.startDate, contract.endDate),
+    };
+  }
+
+  private async attachFiles(
+    tx: Prisma.TransactionClient,
+    user: AuthenticatedUser,
+    contractId: string,
+    body: Payload,
+  ) {
+    const attachmentIds = arrayField<unknown>(body, "attachmentIds").filter(
+      (id): id is string => typeof id === "string" && Boolean(id.trim()),
+    );
+    if (attachmentIds.length === 0) {
+      return;
+    }
+
+    await tx.attachment.updateMany({
+      where: {
+        id: { in: attachmentIds },
+        orgId: user.orgId,
+        OR: [
+          { uploadedById: user.id },
+          { ownerType: "contract", ownerId: contractId },
+        ],
+      },
+      data: {
+        ownerType: "contract",
+        ownerId: contractId,
+        contractId,
+      },
+    });
+  }
+
   private async ensureChargeItemEditable(contractId: string, itemId: string) {
     const billItemCount = await this.prisma.billItem.count({
       where: { contractChargeItemId: itemId, bill: { contractId } },
@@ -510,6 +810,16 @@ export class ContractsService {
           id: true,
           code: true,
           name: true,
+          fullName: true,
+        },
+      },
+      attachments: {
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          fileName: true,
+          contentType: true,
+          createdAt: true,
         },
       },
       chargeItems: {

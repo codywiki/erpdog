@@ -379,6 +379,11 @@ model Contract {
   billingDay Int            @default(1) @map("billing_day")
   currency   String         @default("CNY")
   notes      String?
+  baseFee    Decimal?       @map("base_fee") @db.Decimal(18, 2)
+  incentiveUnitPrice Decimal? @map("incentive_unit_price") @db.Decimal(18, 2)
+  serviceFeeRate Decimal?   @map("service_fee_rate") @db.Decimal(8, 4)
+  tierMode   String?        @map("tier_mode")
+  tierRules  Json?          @map("tier_rules")
   createdAt  DateTime       @default(now()) @map("created_at")
   updatedAt  DateTime       @updatedAt @map("updated_at")
 
@@ -387,6 +392,7 @@ model Contract {
   chargeItems ContractChargeItem[]
   extraCharges ExtraCharge[]
   bills       Bill[]
+  attachments Attachment[]
 
   @@unique([orgId, code])
   @@index([orgId, status])
@@ -891,11 +897,14 @@ model Attachment {
   storageKey  String   @map("storage_key")
   url         String?
   uploadedById String? @map("uploaded_by_id")
+  contractId  String?  @map("contract_id")
   createdAt   DateTime @default(now()) @map("created_at")
 
   org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  contract Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
 
   @@index([orgId, ownerType, ownerId])
+  @@index([contractId])
   @@map("attachments")
 }
 

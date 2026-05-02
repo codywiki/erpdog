@@ -334,6 +334,7 @@ export class FinanceController {
     PERMISSION_CODES.RECEIPT_MANAGE,
     PERMISSION_CODES.COST_MANAGE,
     PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+    PERMISSION_CODES.CONTRACT_WRITE,
   )
   createAttachmentUploadUrl(
     @CurrentUser() user: AuthenticatedUser,
@@ -349,6 +350,7 @@ export class FinanceController {
     PERMISSION_CODES.RECEIPT_MANAGE,
     PERMISSION_CODES.COST_MANAGE,
     PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+    PERMISSION_CODES.CONTRACT_WRITE,
   )
   createAttachment(
     @CurrentUser() user: AuthenticatedUser,

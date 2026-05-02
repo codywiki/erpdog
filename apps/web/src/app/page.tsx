@@ -24,11 +24,33 @@ type Customer = {
   status: string;
 };
 
+type ContractAttachment = {
+  id: string;
+  fileName: string;
+  contentType?: string | null;
+  createdAt?: string;
+};
+
+type ContractTierRule = {
+  threshold: string;
+  serviceFeeRate: string;
+};
+
 type Contract = {
   id: string;
+  customerId?: string;
   code: string;
   name: string;
   status: string;
+  startDate: string;
+  endDate?: string | null;
+  baseFee?: string | null;
+  incentiveUnitPrice?: string | null;
+  serviceFeeRate?: string | null;
+  tierMode?: string | null;
+  tierRules?: ContractTierRule[] | null;
+  attachments?: ContractAttachment[];
+  chargeItems?: Array<{ amount: string; name: string }>;
   customer?: Customer;
 };
 
@@ -288,6 +310,74 @@ function billStatus(value: string) {
   return billStatusText[value] ?? value;
 }
 
+const contractAttachmentMaxBytes = 20 * 1024 * 1024;
+
+function contractPeriod(contract: Contract) {
+  const start = dateText(contract.startDate);
+  const end = dateText(contract.endDate);
+  return `${start} 至 ${end === "-" ? "长期" : end}`;
+}
+
+function contractStatus(contract: Contract) {
+  const endDate = dateText(contract.endDate);
+  if (endDate === "-") {
+    return "合作中";
+  }
+
+  const end = new Date(`${endDate}T23:59:59`);
+  return end < new Date() ? "已结束" : "合作中";
+}
+
+function tierModeText(mode?: string | null) {
+  if (mode === "ACCUMULATE") {
+    return "增加累加";
+  }
+  if (mode === "FULL_COVERAGE") {
+    return "全量覆盖";
+  }
+  return "-";
+}
+
+function moneyText(value?: string | null) {
+  return value && value !== "null" ? value : "-";
+}
+
+function rateText(value?: string | null) {
+  return value && value !== "null" ? `${value}%` : "-";
+}
+
+function contractBaseFee(contract: Contract) {
+  return (
+    contract.baseFee ??
+    contract.chargeItems?.find((item) => item.name.includes("基础"))?.amount ??
+    contract.chargeItems?.[0]?.amount ??
+    "0.00"
+  );
+}
+
+function contractTierSummary(contract: Contract) {
+  const rules = contract.tierRules ?? [];
+  if (rules.length === 0) {
+    return "-";
+  }
+
+  const firstRule = rules[0];
+  if (!firstRule) {
+    return "-";
+  }
+  const suffix = rules.length > 1 ? ` 等 ${rules.length} 条` : "";
+  return `${tierModeText(contract.tierMode)}：达 ${firstRule.threshold} 调整为 ${firstRule.serviceFeeRate}%${suffix}`;
+}
+
+function isContractFileValid(file: File) {
+  return (
+    file.size > 0 &&
+    file.size <= contractAttachmentMaxBytes &&
+    file.name.toLowerCase().endsWith(".pdf") &&
+    (!file.type || file.type === "application/pdf")
+  );
+}
+
 async function responseMessage(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
 
@@ -323,16 +413,34 @@ function createDemoData(periodMonth: string): ConsoleData {
   };
   const contractA: Contract = {
     id: "demo-contract-qingliu",
+    customerId: customerA.id,
     code: "CTR-001",
     name: "清流派月度运营服务合同",
     status: "ACTIVE",
+    startDate: `${periodMonth}-01T00:00:00.000Z`,
+    endDate: "2026-12-31T00:00:00.000Z",
+    baseFee: "10000.00",
+    incentiveUnitPrice: "4.00",
+    serviceFeeRate: "8.0000",
+    tierMode: "ACCUMULATE",
+    tierRules: [{ threshold: "150000.00", serviceFeeRate: "10.0000" }],
+    attachments: [],
     customer: customerA,
   };
   const contractB: Contract = {
     id: "demo-contract-yunhe",
+    customerId: customerB.id,
     code: "CTR-002",
     name: "云河供应链财务外包服务",
     status: "ACTIVE",
+    startDate: `${periodMonth}-01T00:00:00.000Z`,
+    endDate: null,
+    baseFee: "8600.00",
+    incentiveUnitPrice: "3.50",
+    serviceFeeRate: "6.5000",
+    tierMode: "FULL_COVERAGE",
+    tierRules: [{ threshold: "100000.00", serviceFeeRate: "8.0000" }],
+    attachments: [],
     customer: customerB,
   };
   const billA: Bill = {
@@ -517,6 +625,21 @@ export default function Home() {
   );
   const [contractCode, setContractCode] = useState(defaultContractCode);
   const [contractFee, setContractFee] = useState("10000.00");
+  const [contractDialogOpen, setContractDialogOpen] = useState(false);
+  const [editingContractId, setEditingContractId] = useState<string | null>(
+    null,
+  );
+  const [contractStartDate, setContractStartDate] = useState(
+    `${periodMonth}-01`,
+  );
+  const [contractEndDate, setContractEndDate] = useState("");
+  const [contractIncentiveUnitPrice, setContractIncentiveUnitPrice] =
+    useState("0.00");
+  const [contractServiceFeeRate, setContractServiceFeeRate] = useState("0");
+  const [contractTierMode, setContractTierMode] = useState("ACCUMULATE");
+  const [contractTierThreshold, setContractTierThreshold] = useState("");
+  const [contractTierRate, setContractTierRate] = useState("");
+  const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
   const [selectedBillId, setSelectedBillId] = useState("");
@@ -526,11 +649,11 @@ export default function Home() {
   const [newUserRoleCode, setNewUserRoleCode] = useState("customer_manager");
 
   const selectedBill = bills.find((bill) => bill.id === selectedBillId);
-  const selectedCustomer = customers.find(
-    (customer) => customer.id === selectedCustomerId,
-  );
   const editingCustomer = customers.find(
     (customer) => customer.id === editingCustomerId,
+  );
+  const editingContract = contracts.find(
+    (contract) => contract.id === editingContractId,
   );
   const activeModule = modules.find((module) => module.id === active)!;
   const isLoggedIn = Boolean(token && user && !demoMode);
@@ -952,6 +1075,112 @@ export default function Home() {
     setEditingCustomerId(null);
   }
 
+  function resetContractForm(nextCustomerId = selectedCustomerId) {
+    setContractCode(defaultContractCode());
+    setContractFee("10000.00");
+    setContractStartDate(`${periodMonth}-01`);
+    setContractEndDate("");
+    setContractIncentiveUnitPrice("0.00");
+    setContractServiceFeeRate("0");
+    setContractTierMode("ACCUMULATE");
+    setContractTierThreshold("");
+    setContractTierRate("");
+    setContractFiles([]);
+    setEditingContractId(null);
+    setSelectedCustomerId(nextCustomerId || customers[0]?.id || "");
+  }
+
+  function openCreateContractDialog() {
+    const blockedReason = actionBlockReason("contract.write");
+    if (blockedReason) {
+      setMessage(`新增合同失败：${blockedReason}`);
+      return;
+    }
+    if (customers.length === 0) {
+      setMessage("新增合同失败：请先创建客户。");
+      return;
+    }
+
+    resetContractForm(selectedCustomerId || customers[0]?.id || "");
+    setContractDialogOpen(true);
+  }
+
+  function openEditContractDialog(contract: Contract) {
+    const blockedReason = actionBlockReason("contract.write");
+    if (blockedReason) {
+      setMessage(`编辑合同失败：${blockedReason}`);
+      return;
+    }
+
+    const firstRule = contract.tierRules?.[0];
+    setSelectedContractId(contract.id);
+    setSelectedCustomerId(contract.customerId ?? contract.customer?.id ?? "");
+    setEditingContractId(contract.id);
+    setContractCode(contract.code);
+    setContractFee(contractBaseFee(contract));
+    setContractStartDate(dateText(contract.startDate));
+    setContractEndDate(
+      dateText(contract.endDate) === "-" ? "" : dateText(contract.endDate),
+    );
+    setContractIncentiveUnitPrice(contract.incentiveUnitPrice ?? "0.00");
+    setContractServiceFeeRate(contract.serviceFeeRate ?? "0");
+    setContractTierMode(contract.tierMode ?? "ACCUMULATE");
+    setContractTierThreshold(firstRule?.threshold ?? "");
+    setContractTierRate(firstRule?.serviceFeeRate ?? "");
+    setContractFiles([]);
+    setContractDialogOpen(true);
+  }
+
+  function closeContractDialog() {
+    setContractDialogOpen(false);
+    setEditingContractId(null);
+    setContractFiles([]);
+  }
+
+  function updateContractFiles(fileList: FileList | null) {
+    const nextFiles = Array.from(fileList ?? []);
+    const invalid = nextFiles.find((file) => !isContractFileValid(file));
+    if (invalid) {
+      setContractFiles([]);
+      setMessage(
+        `合同附件 ${invalid.name} 不符合要求：必须是 PDF，且小于 20MB。`,
+      );
+      return;
+    }
+
+    setContractFiles(nextFiles);
+  }
+
+  async function uploadContractFiles(contractId: string, files: File[]) {
+    for (const file of files) {
+      const presigned = await request<{
+        upload: {
+          url: string;
+          method: "PUT";
+          headers: Record<string, string>;
+        };
+      }>("/attachments/presign-upload", {
+        method: "POST",
+        body: JSON.stringify({
+          ownerType: "contract",
+          ownerId: contractId,
+          fileName: file.name,
+          contentType: file.type || "application/pdf",
+          sizeBytes: file.size,
+        }),
+      });
+
+      const uploadResponse = await fetch(presigned.upload.url, {
+        method: presigned.upload.method,
+        headers: presigned.upload.headers,
+        body: file,
+      });
+      if (!uploadResponse.ok) {
+        throw new Error(`合同附件 ${file.name} 上传失败。`);
+      }
+    }
+  }
+
   function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (
@@ -1017,39 +1246,104 @@ export default function Home() {
   function createContract(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCustomerId) {
-      setMessage("创建合同失败：请先选择客户。");
+      setMessage("保存合同失败：请先选择客户。");
       return;
     }
     if (!contractCode.trim()) {
-      setMessage("创建合同失败：合同编码不能为空。");
+      setMessage("保存合同失败：合同编号不能为空。");
       return;
     }
-    if (!Number.isFinite(Number(contractFee)) || Number(contractFee) <= 0) {
-      setMessage("创建合同失败：基础月费必须大于 0。");
+    if (!contractStartDate) {
+      setMessage("保存合同失败：合同周期开始日期不能为空。");
+      return;
+    }
+    if (
+      contractEndDate &&
+      new Date(contractEndDate).getTime() <
+        new Date(contractStartDate).getTime()
+    ) {
+      setMessage("保存合同失败：合同结束日期不能早于开始日期。");
       return;
     }
 
-    void submitAction("创建合同", ["contract.write"], async () => {
-      const result = await request("/contracts", {
-        method: "POST",
-        body: JSON.stringify({
-          customerId: selectedCustomerId,
-          code: contractCode,
-          name: `${selectedCustomer?.name ?? customerName} 服务合同`,
-          status: "ACTIVE",
-          startDate: `${periodMonth}-01`,
-          chargeItems: [
-            {
-              name: "基础服务费",
-              kind: "FIXED",
-              amount: contractFee,
-            },
-          ],
-        }),
-      });
-      setContractCode(defaultContractCode());
-      return result;
-    });
+    const moneyFields: Array<[string, string]> = [
+      ["基础费用", contractFee],
+      ["激励单价", contractIncentiveUnitPrice],
+      ["服务费比例", contractServiceFeeRate],
+    ];
+    const invalidField = moneyFields.find(
+      ([, value]) =>
+        !value.trim() || !Number.isFinite(Number(value)) || Number(value) < 0,
+    );
+    if (invalidField) {
+      setMessage(`保存合同失败：${invalidField[0]}必须是非负数字。`);
+      return;
+    }
+
+    const hasTierRule =
+      Boolean(contractTierThreshold.trim()) || Boolean(contractTierRate.trim());
+    if (
+      hasTierRule &&
+      (!contractTierThreshold.trim() ||
+        !contractTierRate.trim() ||
+        !contractTierMode)
+    ) {
+      setMessage("保存合同失败：配置阶梯规则时必须填写条件、比例和规则模式。");
+      return;
+    }
+    if (
+      hasTierRule &&
+      (!Number.isFinite(Number(contractTierThreshold)) ||
+        Number(contractTierThreshold) < 0 ||
+        !Number.isFinite(Number(contractTierRate)) ||
+        Number(contractTierRate) < 0)
+    ) {
+      setMessage("保存合同失败：阶梯条件和阶梯服务费比例必须是非负数字。");
+      return;
+    }
+
+    const isEditing = Boolean(editingContractId);
+    const contractCustomer = customers.find(
+      (customer) => customer.id === selectedCustomerId,
+    );
+
+    void submitAction(
+      isEditing ? "修改合同" : "创建合同",
+      ["contract.write"],
+      async () => {
+        const result = await request<Contract>(
+          isEditing ? `/contracts/${editingContractId}` : "/contracts",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            body: JSON.stringify({
+              customerId: selectedCustomerId,
+              code: contractCode,
+              name: `${contractCustomer?.name ?? "客户"} ${contractCode} 服务合同`,
+              startDate: contractStartDate,
+              endDate: contractEndDate || null,
+              baseFee: contractFee,
+              incentiveUnitPrice: contractIncentiveUnitPrice,
+              serviceFeeRate: contractServiceFeeRate,
+              tierMode: hasTierRule ? contractTierMode : null,
+              tierRules: hasTierRule
+                ? [
+                    {
+                      threshold: contractTierThreshold,
+                      serviceFeeRate: contractTierRate,
+                    },
+                  ]
+                : [],
+            }),
+          },
+        );
+        if (contractFiles.length > 0) {
+          await uploadContractFiles(result.id, contractFiles);
+        }
+        setContractDialogOpen(false);
+        resetContractForm(selectedCustomerId);
+        return result;
+      },
+    );
   }
 
   function runBilling() {
@@ -1343,18 +1637,39 @@ export default function Home() {
 
         {active === "contracts" ? (
           <ContractsModule
+            closeContractDialog={closeContractDialog}
             contractCode={contractCode}
+            contractDialogOpen={contractDialogOpen}
+            contractEndDate={contractEndDate}
             contractFee={contractFee}
+            contractFiles={contractFiles}
+            contractIncentiveUnitPrice={contractIncentiveUnitPrice}
+            contractServiceFeeRate={contractServiceFeeRate}
+            contractStartDate={contractStartDate}
+            contractTierMode={contractTierMode}
+            contractTierRate={contractTierRate}
+            contractTierThreshold={contractTierThreshold}
             contracts={contracts}
             createContract={createContract}
             customers={customers}
             disabledReason={actionBlockReason("contract.write")}
+            editingContract={editingContract}
+            openCreateContractDialog={openCreateContractDialog}
+            openEditContractDialog={openEditContractDialog}
             selectedCustomerId={selectedCustomerId}
             selectedContractId={selectedContractId}
             setContractCode={setContractCode}
+            setContractEndDate={setContractEndDate}
             setContractFee={setContractFee}
+            setContractIncentiveUnitPrice={setContractIncentiveUnitPrice}
+            setContractServiceFeeRate={setContractServiceFeeRate}
+            setContractStartDate={setContractStartDate}
+            setContractTierMode={setContractTierMode}
+            setContractTierRate={setContractTierRate}
+            setContractTierThreshold={setContractTierThreshold}
             setSelectedCustomerId={setSelectedCustomerId}
             setSelectedContractId={setSelectedContractId}
+            updateContractFiles={updateContractFiles}
           />
         ) : null}
 
@@ -1872,109 +2187,317 @@ function CustomersModule({
 }
 
 function ContractsModule({
+  closeContractDialog,
   contractCode,
+  contractDialogOpen,
+  contractEndDate,
   contractFee,
+  contractFiles,
+  contractIncentiveUnitPrice,
+  contractServiceFeeRate,
+  contractStartDate,
+  contractTierMode,
+  contractTierRate,
+  contractTierThreshold,
   contracts,
   createContract,
   customers,
   disabledReason,
+  editingContract,
+  openCreateContractDialog,
+  openEditContractDialog,
   selectedCustomerId,
   selectedContractId,
   setContractCode,
+  setContractEndDate,
   setContractFee,
+  setContractIncentiveUnitPrice,
+  setContractServiceFeeRate,
+  setContractStartDate,
+  setContractTierMode,
+  setContractTierRate,
+  setContractTierThreshold,
   setSelectedCustomerId,
   setSelectedContractId,
+  updateContractFiles,
 }: {
+  closeContractDialog: () => void;
   contractCode: string;
+  contractDialogOpen: boolean;
+  contractEndDate: string;
   contractFee: string;
+  contractFiles: File[];
+  contractIncentiveUnitPrice: string;
+  contractServiceFeeRate: string;
+  contractStartDate: string;
+  contractTierMode: string;
+  contractTierRate: string;
+  contractTierThreshold: string;
   contracts: Contract[];
   createContract: (event: FormEvent<HTMLFormElement>) => void;
   customers: Customer[];
   disabledReason: string;
+  editingContract?: Contract;
+  openCreateContractDialog: () => void;
+  openEditContractDialog: (contract: Contract) => void;
   selectedCustomerId: string;
   selectedContractId: string;
   setContractCode: (value: string) => void;
+  setContractEndDate: (value: string) => void;
   setContractFee: (value: string) => void;
+  setContractIncentiveUnitPrice: (value: string) => void;
+  setContractServiceFeeRate: (value: string) => void;
+  setContractStartDate: (value: string) => void;
+  setContractTierMode: (value: string) => void;
+  setContractTierRate: (value: string) => void;
+  setContractTierThreshold: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
   setSelectedContractId: (value: string) => void;
+  updateContractFiles: (fileList: FileList | null) => void;
 }) {
   return (
-    <section className="workspace two-column">
-      <div className="panel">
-        <div className="panel-header">
-          <h2>新建合同</h2>
-          <span>收费规则</span>
-        </div>
-        <form className="module-form" onSubmit={createContract}>
-          <label>
-            客户
-            <select
-              onChange={(event) => setSelectedCustomerId(event.target.value)}
-              value={selectedCustomerId}
-            >
-              <option value="">选择客户</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            合同编码
-            <input
-              onChange={(event) => setContractCode(event.target.value)}
-              value={contractCode}
-            />
-          </label>
-          <label>
-            基础月费
-            <input
-              onChange={(event) => setContractFee(event.target.value)}
-              value={contractFee}
-            />
-          </label>
-          {disabledReason ? (
-            <small className="form-note">{disabledReason}</small>
-          ) : null}
+    <section className="workspace">
+      <TablePanel
+        action={
           <button
             className="primary"
             disabled={Boolean(disabledReason)}
-            type="submit"
+            onClick={openCreateContractDialog}
+            type="button"
           >
-            创建合同
+            新增合同
           </button>
-        </form>
-      </div>
-
-      <TablePanel title="合同列表" count={`${contracts.length} 份`}>
+        }
+        count={`${contracts.length} 份`}
+        title="合同列表"
+      >
+        {disabledReason ? (
+          <div className="inline-notice">{disabledReason}</div>
+        ) : null}
         <table>
           <thead>
             <tr>
-              <th>合同号</th>
-              <th>合同</th>
-              <th>客户</th>
+              <th>合同编号</th>
+              <th>客户简称</th>
+              <th>合同周期</th>
+              <th>基础费用</th>
+              <th>激励单价</th>
+              <th>服务费比例</th>
+              <th>阶梯规则</th>
+              <th>合同附件</th>
               <th>状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
-            {contracts.map((contract) => (
-              <tr
-                data-selected={selectedContractId === contract.id}
-                key={contract.id}
-                onClick={() => setSelectedContractId(contract.id)}
-              >
-                <td>{contract.code}</td>
-                <td>{contract.name}</td>
-                <td>{contract.customer?.name ?? "-"}</td>
-                <td>
-                  <span className="status">{contract.status}</span>
-                </td>
-              </tr>
-            ))}
+            {contracts.map((contract) => {
+              const attachments = contract.attachments ?? [];
+              return (
+                <tr
+                  data-selected={selectedContractId === contract.id}
+                  key={contract.id}
+                  onClick={() => setSelectedContractId(contract.id)}
+                >
+                  <td>{contract.code}</td>
+                  <td>{contract.customer?.name ?? "-"}</td>
+                  <td className="wrap-cell">{contractPeriod(contract)}</td>
+                  <td>{moneyText(contractBaseFee(contract))}</td>
+                  <td>{moneyText(contract.incentiveUnitPrice)}</td>
+                  <td>{rateText(contract.serviceFeeRate)}</td>
+                  <td className="wrap-cell">{contractTierSummary(contract)}</td>
+                  <td className="wrap-cell">
+                    {attachments.length > 0
+                      ? attachments.map((item) => item.fileName).join("、")
+                      : "-"}
+                  </td>
+                  <td>
+                    <span className="status">{contractStatus(contract)}</span>
+                  </td>
+                  <td>
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openEditContractDialog(contract);
+                      }}
+                      type="button"
+                    >
+                      编辑
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </TablePanel>
+
+      {contractDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeContractDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>{editingContract ? "编辑合同" : "新增合同"}</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeContractDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={createContract}>
+              <div className="form-grid">
+                <label>
+                  客户选择
+                  <select
+                    onChange={(event) =>
+                      setSelectedCustomerId(event.target.value)
+                    }
+                    value={selectedCustomerId}
+                  >
+                    <option value="">选择客户</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  合同编号
+                  <input
+                    onChange={(event) => setContractCode(event.target.value)}
+                    placeholder="例如 CTR-202605"
+                    value={contractCode}
+                  />
+                </label>
+                <label>
+                  周期开始
+                  <input
+                    onChange={(event) =>
+                      setContractStartDate(event.target.value)
+                    }
+                    type="date"
+                    value={contractStartDate}
+                  />
+                </label>
+                <label>
+                  周期结束
+                  <input
+                    onChange={(event) => setContractEndDate(event.target.value)}
+                    type="date"
+                    value={contractEndDate}
+                  />
+                </label>
+                <label>
+                  基础费用
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) => setContractFee(event.target.value)}
+                    value={contractFee}
+                  />
+                </label>
+                <label>
+                  激励单价
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setContractIncentiveUnitPrice(event.target.value)
+                    }
+                    value={contractIncentiveUnitPrice}
+                  />
+                </label>
+                <label>
+                  服务费比例 %
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setContractServiceFeeRate(event.target.value)
+                    }
+                    value={contractServiceFeeRate}
+                  />
+                </label>
+                <label>
+                  阶梯规则模式
+                  <select
+                    onChange={(event) =>
+                      setContractTierMode(event.target.value)
+                    }
+                    value={contractTierMode}
+                  >
+                    <option value="ACCUMULATE">增加累加</option>
+                    <option value="FULL_COVERAGE">全量覆盖</option>
+                  </select>
+                </label>
+                <label>
+                  达到条件 X
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setContractTierThreshold(event.target.value)
+                    }
+                    placeholder="留空表示不启用阶梯"
+                    value={contractTierThreshold}
+                  />
+                </label>
+                <label>
+                  服务费比例 Y %
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setContractTierRate(event.target.value)
+                    }
+                    placeholder="留空表示不启用阶梯"
+                    value={contractTierRate}
+                  />
+                </label>
+                <label className="full-span">
+                  合同附件
+                  <input
+                    accept="application/pdf,.pdf"
+                    multiple
+                    onChange={(event) =>
+                      updateContractFiles(event.target.files)
+                    }
+                    type="file"
+                  />
+                </label>
+              </div>
+              <div className="file-list">
+                {contractFiles.length > 0
+                  ? contractFiles.map((file) => (
+                      <span key={`${file.name}-${file.size}`}>{file.name}</span>
+                    ))
+                  : "仅支持 PDF，单个文件小于 20MB，可一次选择多个文件。"}
+              </div>
+              {disabledReason ? (
+                <small className="form-note">{disabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeContractDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(disabledReason)}
+                  type="submit"
+                >
+                  {editingContract ? "保存修改" : "创建合同"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

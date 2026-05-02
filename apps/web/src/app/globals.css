@@ -463,6 +463,44 @@ tr[data-selected="true"] {
   width: min(100%, 520px);
 }
 
+.modal-panel.wide {
+  max-height: calc(100vh - 44px);
+  max-width: 760px;
+  overflow: auto;
+  width: min(100%, 760px);
+}
+
+.form-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.full-span {
+  grid-column: 1 / -1;
+}
+
+.file-list {
+  background: #f7fbf9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 8px;
+  line-height: 1.5;
+  padding: 10px;
+}
+
+.file-list span {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  padding: 4px 8px;
+}
+
 .icon-button {
   align-items: center;
   border-radius: 999px;
@@ -512,6 +550,7 @@ tr[data-selected="true"] {
 
   .login-panel form,
   .toolbar,
+  .form-grid,
   .metric-grid {
     grid-template-columns: 1fr;
   }
@@ -525,6 +564,11 @@ tr[data-selected="true"] {
 
   .panel-actions {
     align-items: stretch;
+  }
+
+  .modal-panel .panel-header {
+    align-items: center;
+    flex-direction: row;
   }
 
   .mode-banner strong {

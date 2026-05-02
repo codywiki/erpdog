@@ -50,6 +50,8 @@ import {
 } from "../../common/utils/pagination";
 import { CustomersService } from "../customers/customers.service";
 
+const CONTRACT_ATTACHMENT_MAX_BYTES = BigInt(20 * 1024 * 1024);
+
 type PeriodCustomerFilters = {
   periodMonth?: string;
   customerId?: string;
@@ -1333,20 +1335,30 @@ export class FinanceService {
     const ownerType = optionalString(body, "ownerType");
     const ownerId = optionalString(body, "ownerId");
     await this.ensureAttachmentOwnerAccess(user, ownerType, ownerId);
+    const fileName = stringField(body, "fileName");
+    const contentType = optionalString(body, "contentType");
+    const sizeBytes = this.attachmentSize(body);
+    this.validateContractAttachment(
+      ownerType,
+      fileName,
+      contentType,
+      sizeBytes,
+    );
 
     const attachment = await this.prisma.attachment.create({
       data: {
         orgId: user.orgId,
         ownerType,
         ownerId,
-        fileName: stringField(body, "fileName"),
-        contentType: optionalString(body, "contentType"),
-        sizeBytes: this.attachmentSize(body),
+        fileName,
+        contentType,
+        sizeBytes,
         storageKey:
           optionalString(body, "storageKey") ??
-          `attachments/${user.orgId}/${Date.now()}-${stringField(body, "fileName")}`,
+          `attachments/${user.orgId}/${Date.now()}-${fileName}`,
         url: optionalString(body, "url"),
         uploadedById: user.id,
+        contractId: this.attachmentContractId(ownerType, ownerId),
       },
     });
 
@@ -1374,6 +1386,12 @@ export class FinanceService {
     const fileName = stringField(body, "fileName");
     const contentType = optionalString(body, "contentType");
     const sizeBytes = this.attachmentSize(body);
+    this.validateContractAttachment(
+      ownerType,
+      fileName,
+      contentType,
+      sizeBytes,
+    );
     const presigned = await this.storage.createPresignedUpload({
       orgId: user.orgId,
       fileName,
@@ -1391,6 +1409,7 @@ export class FinanceService {
         sizeBytes,
         storageKey: presigned.storageKey,
         uploadedById: user.id,
+        contractId: this.attachmentContractId(ownerType, ownerId),
       },
     });
 
@@ -2072,6 +2091,43 @@ export class FinanceService {
     }
 
     return parsed;
+  }
+
+  private attachmentContractId(ownerType?: string, ownerId?: string) {
+    return ownerType === "contract" ? ownerId : undefined;
+  }
+
+  private validateContractAttachment(
+    ownerType: string | undefined,
+    fileName: string,
+    contentType: string | undefined,
+    sizeBytes: bigint | undefined,
+  ) {
+    if (ownerType !== "contract") {
+      return;
+    }
+
+    const normalizedName = fileName.toLowerCase();
+    const normalizedContentType = contentType?.toLowerCase();
+    if (
+      !normalizedName.endsWith(".pdf") ||
+      (normalizedContentType !== undefined &&
+        normalizedContentType !== "application/pdf")
+    ) {
+      throw new BadRequestException("Contract attachments must be PDF files.");
+    }
+
+    if (sizeBytes === undefined) {
+      throw new BadRequestException(
+        "Contract attachment sizeBytes is required.",
+      );
+    }
+
+    if (sizeBytes > CONTRACT_ATTACHMENT_MAX_BYTES) {
+      throw new BadRequestException(
+        "Contract attachments must be smaller than 20MB.",
+      );
+    }
   }
 
   private presentAttachment(attachment: AttachmentRecord) {
