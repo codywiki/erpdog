@@ -721,6 +721,7 @@ export default function Home() {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
   const [selectedBillId, setSelectedBillId] = useState("");
+  const [billDialogOpen, setBillDialogOpen] = useState(false);
   const [billContentName, setBillContentName] = useState("本月合作服务");
   const [billQuantity, setBillQuantity] = useState("1");
   const [billSettlementFile, setBillSettlementFile] = useState<File | null>(
@@ -1522,8 +1523,40 @@ export default function Home() {
         }),
       });
       setSelectedBillId(result.id);
+      setBillDialogOpen(false);
       return result;
     });
+  }
+
+  function openCreateBillDialog() {
+    const blockedReason = actionBlockReason("bill.manage");
+    if (blockedReason) {
+      setMessage(`生成客户月账单失败：${blockedReason}`);
+      return;
+    }
+    if (customers.length === 0) {
+      setMessage("生成客户月账单失败：请先创建客户。");
+      return;
+    }
+    if (contracts.length === 0) {
+      setMessage("生成客户月账单失败：请先创建合同。");
+      return;
+    }
+
+    const nextCustomerId = selectedCustomerId || customers[0]?.id || "";
+    const nextContract =
+      contracts.find(
+        (contract) =>
+          contract.customerId === nextCustomerId ||
+          contract.customer?.id === nextCustomerId,
+      ) ?? contracts[0];
+    setSelectedCustomerId(nextCustomerId);
+    setSelectedContractId(nextContract?.id ?? "");
+    setBillDialogOpen(true);
+  }
+
+  function closeBillDialog() {
+    setBillDialogOpen(false);
   }
 
   function transitionBill(path: string, label: string, body: object = {}) {
@@ -1969,11 +2002,13 @@ export default function Home() {
         {active === "billing" ? (
           <BillingModule
             billContentName={billContentName}
+            billDialogOpen={billDialogOpen}
             billInvoiceFile={billInvoiceFile}
             billPaymentProofFile={billPaymentProofFile}
             billQuantity={billQuantity}
             billSettlementFile={billSettlementFile}
             bills={bills}
+            closeBillDialog={closeBillDialog}
             confirmBillSettlement={confirmBillSettlement}
             confirmSelectedBillReceipt={confirmSelectedBillReceipt}
             contracts={contracts}
@@ -1981,6 +2016,7 @@ export default function Home() {
             createSelectedBillInvoice={createSelectedBillInvoice}
             customers={customers}
             invoiceDisabledReason={actionBlockReason("invoice.manage")}
+            openCreateBillDialog={openCreateBillDialog}
             receiptAccount={receiptAccount}
             receiptDisabledReason={actionBlockReason("receipt.manage")}
             selectedBillId={selectedBillId}
@@ -2815,12 +2851,14 @@ function ContractsModule({
 
 function BillingModule({
   billContentName,
+  billDialogOpen,
   billDisabledReason,
   billInvoiceFile,
   billPaymentProofFile,
   billQuantity,
   billSettlementFile,
   bills,
+  closeBillDialog,
   confirmBillSettlement,
   confirmSelectedBillReceipt,
   contracts,
@@ -2828,6 +2866,7 @@ function BillingModule({
   createSelectedBillInvoice,
   customers,
   invoiceDisabledReason,
+  openCreateBillDialog,
   receiptAccount,
   receiptDisabledReason,
   selectedBill,
@@ -2847,12 +2886,14 @@ function BillingModule({
   setSelectedCustomerId,
 }: {
   billContentName: string;
+  billDialogOpen: boolean;
   billDisabledReason: string;
   billInvoiceFile: File | null;
   billPaymentProofFile: File | null;
   billQuantity: string;
   billSettlementFile: File | null;
   bills: Bill[];
+  closeBillDialog: () => void;
   confirmBillSettlement: () => void;
   confirmSelectedBillReceipt: () => void;
   contracts: Contract[];
@@ -2860,6 +2901,7 @@ function BillingModule({
   createSelectedBillInvoice: () => void;
   customers: Customer[];
   invoiceDisabledReason: string;
+  openCreateBillDialog: () => void;
   receiptAccount: string;
   receiptDisabledReason: string;
   selectedBill?: Bill;
@@ -2913,108 +2955,156 @@ function BillingModule({
 
   return (
     <section className="workspace billing-layout">
-      <div className="panel">
-        <div className="panel-header">
-          <h2>生成客户月账单</h2>
-          <span>业务负责人</span>
-        </div>
-        <form className="module-form" onSubmit={createBusinessBill}>
-          <label>
-            客户
-            <select
-              onChange={(event) => {
-                const customerId = event.target.value;
-                const nextContract = contracts.find(
-                  (contract) =>
-                    contract.customerId === customerId ||
-                    contract.customer?.id === customerId,
-                );
-                setSelectedCustomerId(customerId);
-                setSelectedContractId(nextContract?.id ?? "");
-              }}
-              value={selectedCustomerId}
-            >
-              <option value="">选择客户</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            合同
-            <select
-              onChange={(event) => setSelectedContractId(event.target.value)}
-              value={selectedContractId}
-            >
-              <option value="">选择合同</option>
-              {customerContracts.map((contract) => (
-                <option key={contract.id} value={contract.id}>
-                  {contract.code} · {contractPeriod(contract)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            合作内容
-            <input
-              onChange={(event) => setBillContentName(event.target.value)}
-              value={billContentName}
-            />
-          </label>
-          <label>
-            数量
-            <input
-              inputMode="decimal"
-              onChange={(event) => setBillQuantity(event.target.value)}
-              value={billQuantity}
-            />
-          </label>
-          <div className="definition-list compact">
-            <div>
-              <span>基础费用</span>
-              <strong>{money(baseFee)}</strong>
-            </div>
-            <div>
-              <span>激励单价</span>
-              <strong>{money(unitPrice)}</strong>
-            </div>
-            <div>
-              <span>服务费比例</span>
-              <strong>{rateText(selectedContract?.serviceFeeRate)}</strong>
-            </div>
-            <div>
-              <span>阶梯规则</span>
-              <strong>
-                {selectedContract ? contractTierSummary(selectedContract) : "-"}
-              </strong>
-            </div>
-            <div>
-              <span>账单预估</span>
-              <strong>{money(previewTotal)}</strong>
-            </div>
-          </div>
-          {billDisabledReason ? (
-            <small className="form-note">{billDisabledReason}</small>
-          ) : null}
+      <TablePanel
+        action={
           <button
             className="primary"
             disabled={Boolean(billDisabledReason)}
-            type="submit"
+            onClick={openCreateBillDialog}
+            type="button"
           >
-            生成账单
+            生成客户月账单
           </button>
-        </form>
-      </div>
-
-      <TablePanel title="账单列表" count={`${bills.length} 条`}>
+        }
+        title="账单列表"
+        count={`${bills.length} 条`}
+      >
+        {billDisabledReason ? (
+          <div className="inline-notice">{billDisabledReason}</div>
+        ) : null}
         <BillsTable
           bills={bills}
           onSelect={setSelectedBillId}
           selectedBillId={selectedBillId}
         />
       </TablePanel>
+
+      {billDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeBillDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>生成客户月账单</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeBillDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={createBusinessBill}>
+              <div className="form-grid">
+                <label>
+                  客户
+                  <select
+                    onChange={(event) => {
+                      const customerId = event.target.value;
+                      const nextContract = contracts.find(
+                        (contract) =>
+                          contract.customerId === customerId ||
+                          contract.customer?.id === customerId,
+                      );
+                      setSelectedCustomerId(customerId);
+                      setSelectedContractId(nextContract?.id ?? "");
+                    }}
+                    value={selectedCustomerId}
+                  >
+                    <option value="">选择客户</option>
+                    {customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  合同
+                  <select
+                    onChange={(event) =>
+                      setSelectedContractId(event.target.value)
+                    }
+                    value={selectedContractId}
+                  >
+                    <option value="">选择合同</option>
+                    {customerContracts.map((contract) => (
+                      <option key={contract.id} value={contract.id}>
+                        {contract.code} · {contractPeriod(contract)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  合作内容
+                  <input
+                    onChange={(event) => setBillContentName(event.target.value)}
+                    value={billContentName}
+                  />
+                </label>
+                <label>
+                  数量
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) => setBillQuantity(event.target.value)}
+                    value={billQuantity}
+                  />
+                </label>
+                <div className="definition-list compact full-span">
+                  <div>
+                    <span>基础费用</span>
+                    <strong>{money(baseFee)}</strong>
+                  </div>
+                  <div>
+                    <span>激励单价</span>
+                    <strong>{money(unitPrice)}</strong>
+                  </div>
+                  <div>
+                    <span>服务费比例</span>
+                    <strong>
+                      {rateText(selectedContract?.serviceFeeRate)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>阶梯规则</span>
+                    <strong>
+                      {selectedContract
+                        ? contractTierSummary(selectedContract)
+                        : "-"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>账单预估</span>
+                    <strong>{money(previewTotal)}</strong>
+                  </div>
+                </div>
+              </div>
+              {billDisabledReason ? (
+                <small className="form-note">{billDisabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeBillDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(billDisabledReason)}
+                  type="submit"
+                >
+                  生成账单
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
 
       <div className="panel">
         <div className="panel-header">
