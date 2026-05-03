@@ -705,7 +705,12 @@ export class CustomersService {
       where: {
         orgId,
         ...(excludeId ? { id: { not: excludeId } } : {}),
-        OR: [{ name }, { fullName }, { name: fullName }, { fullName: name }],
+        OR: [
+          { name: { equals: name, mode: "insensitive" } },
+          { fullName: { equals: fullName, mode: "insensitive" } },
+          { name: { equals: fullName, mode: "insensitive" } },
+          { fullName: { equals: name, mode: "insensitive" } },
+        ],
       },
       select: { code: true, name: true, fullName: true },
     });

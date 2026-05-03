@@ -4,7 +4,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "erpdog",
-  description: "Internal ERP for long-running service operations",
+  description:
+    "面向长期服务型业务的客户、合同、账单、结算、成本付款和月结利润 ERP 系统",
 };
 
 export default function RootLayout({

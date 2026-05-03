@@ -22,13 +22,12 @@ publishing Docker images to GitHub Container Registry.
 - typecheck all workspaces
 - build all apps
 
-## GitHub Pages Preview
+## GitHub Pages Web Entry
 
 `.github/workflows/pages-preview.yml` builds a static export of the Web app and
-publishes it to the `gh-pages` branch on every push to `main`. This preview is
-meant for product walkthroughs: the Web app includes an in-browser demo mode
-with seeded 2026-04 data, so it works even when no public API or database has
-been deployed.
+publishes it to the `gh-pages` branch on every push to `main`. The exported Web
+app is a real system entrypoint and must be connected to a deployed API through
+repository variable `NEXT_PUBLIC_API_URL`.
 
 If GitHub Pages is not enabled automatically, open repository Settings -> Pages
 and select "Deploy from a branch", then choose `gh-pages` and `/root`. The
@@ -38,8 +37,12 @@ expected preview URL for `codywiki/erpdog` is:
 https://codywiki.github.io/erpdog/
 ```
 
-If a real API is available later, set repository variable `NEXT_PUBLIC_API_URL`
-to the public API base URL before rebuilding the preview.
+Set repository variable `NEXT_PUBLIC_API_URL` to the public API base URL before
+building, for example:
+
+```text
+http://47.92.160.116/api/v1
+```
 
 The workflow sets `NEXT_BASE_PATH=/erpdog` so Next.js asset URLs match the
 repository Pages path. Change this value if the repository name or Pages path
@@ -62,9 +65,8 @@ secrets. Then run:
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm db:migrate
+docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm exec prisma migrate deploy --schema prisma/schema.prisma
 docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm db:seed
-docker compose -f docker-compose.prod.yml --env-file .env.production exec api corepack pnpm db:seed:demo
 ```
 
 For a single-server start, put Caddy or Nginx in front of:
@@ -72,3 +74,9 @@ For a single-server start, put Caddy or Nginx in front of:
 - Web: `http://localhost:3000`
 - API: `http://localhost:4000`
 - MinIO console: `http://localhost:9001`
+
+## License
+
+erpdog is licensed under GNU Affero General Public License v3.0 only
+(`AGPL-3.0-only`). See the repository `LICENSE` file and the official GNU AGPLv3
+text at `https://www.gnu.org/licenses/agpl-3.0.html`.

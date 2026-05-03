@@ -125,6 +125,36 @@ async function request<T>(
   return body as T;
 }
 
+async function expectStatus(
+  client: ApiClient,
+  path: string,
+  expectedStatus: number,
+  options: {
+    method?: string;
+    body?: unknown;
+    auth?: boolean;
+  } = {},
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (options.auth !== false && client.token) {
+    headers.Authorization = `Bearer ${client.token}`;
+  }
+
+  const response = await fetch(`${client.baseUrl}${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const text = await response.text();
+  if (response.status !== expectedStatus) {
+    throw new Error(
+      `${options.method ?? "GET"} ${path} expected ${expectedStatus}, got ${response.status}: ${text}`,
+    );
+  }
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -250,6 +280,13 @@ async function main() {
       /^KH\d{3}$/.test(customerCode),
       "Customer code was not auto-numbered.",
     );
+    await expectStatus(client, "/customers", 409, {
+      method: "POST",
+      body: {
+        name: `e2e 客户 ${runId}`,
+        fullName: `e2e 客户有限公司 ${runId}`,
+      },
+    });
 
     const signingEntity = await request<{ id: string; code: string }>(
       client,
@@ -268,6 +305,15 @@ async function main() {
       /^ZT\d{3}$/.test(signingEntity.code),
       "Signing entity code was not auto-numbered.",
     );
+    await expectStatus(client, "/signing-entities", 409, {
+      method: "POST",
+      body: {
+        shortName: `e2e 主体 ${runId}`,
+        fullName: `e2e 签约主体有限公司 ${runId}`,
+        legalRepresentative: "E2E 法人",
+        taxpayerType: "GENERAL",
+      },
+    });
 
     await request(client, "/contracts/import-template");
     const contractImport = await request<{

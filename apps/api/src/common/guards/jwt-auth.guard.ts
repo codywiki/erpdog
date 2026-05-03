@@ -7,9 +7,14 @@ import {
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
 
-import type { AuthenticatedUser } from "@erpdog/contracts";
+import type {
+  AuthenticatedUser,
+  PermissionCode,
+  RoleCode,
+} from "@erpdog/contracts";
 
 import { IS_PUBLIC_ROUTE } from "../decorators/public.decorator";
+import { PrismaService } from "../prisma/prisma.service";
 
 type RequestWithAuth = {
   headers: {
@@ -23,6 +28,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -43,8 +49,9 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      request.user =
+      const payload =
         await this.jwtService.verifyAsync<AuthenticatedUser>(token);
+      request.user = await this.currentUser(payload.id);
       return true;
     } catch {
       throw new UnauthorizedException("Invalid or expired bearer token.");
@@ -54,5 +61,53 @@ export class JwtAuthGuard implements CanActivate {
   private extractBearerToken(header?: string): string | undefined {
     const [type, token] = header?.split(" ") ?? [];
     return type === "Bearer" ? token : undefined;
+  }
+
+  private async currentUser(userId: string): Promise<AuthenticatedUser> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, isActive: true },
+      include: {
+        userRoles: {
+          include: {
+            role: {
+              include: {
+                permissions: {
+                  include: {
+                    permission: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException("Invalid or expired bearer token.");
+    }
+
+    const roles = user.userRoles.map(
+      (userRole) => userRole.role.code as RoleCode,
+    );
+    const permissions = Array.from(
+      new Set(
+        user.userRoles.flatMap((userRole) =>
+          userRole.role.permissions.map(
+            (rolePermission) =>
+              rolePermission.permission.code as PermissionCode,
+          ),
+        ),
+      ),
+    );
+
+    return {
+      id: user.id,
+      orgId: user.orgId,
+      email: user.email,
+      name: user.name,
+      roles,
+      permissions,
+    };
   }
 }

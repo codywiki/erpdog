@@ -240,7 +240,12 @@ export class SigningEntitiesService {
       where: {
         orgId,
         ...(excludeId ? { id: { not: excludeId } } : {}),
-        OR: [{ shortName }, { fullName }],
+        OR: [
+          { shortName: { equals: shortName, mode: "insensitive" } },
+          { fullName: { equals: fullName, mode: "insensitive" } },
+          { shortName: { equals: fullName, mode: "insensitive" } },
+          { fullName: { equals: shortName, mode: "insensitive" } },
+        ],
       },
       select: { code: true, shortName: true, fullName: true },
     });
