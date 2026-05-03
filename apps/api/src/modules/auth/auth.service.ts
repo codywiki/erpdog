@@ -104,7 +104,7 @@ export class AuthService {
     return {
       accessToken: await this.jwtService.signAsync(payload),
       tokenType: "Bearer",
-      expiresIn: this.config.get<string>("JWT_ACCESS_TTL", "15m"),
+      expiresIn: this.config.get<string>("JWT_ACCESS_TTL", "30d"),
       user: payload,
     };
   }

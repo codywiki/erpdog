@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type ApiUser = {
   email: string;
@@ -191,16 +191,15 @@ type PaginatedResponse<T> = {
   totalPages: number;
 };
 
-const demoToken = "demo-token";
-
-const demoUser: ApiUser = {
-  email: "demo@erpdog.local",
-  name: "Demo Admin",
-  permissions: ["demo"],
-};
-
 const authExpiredMessage = "登录已过期，请重新登录。";
 const loginRequiredMessage = "请先登录正式系统。";
+const authSessionCookieName = "erpdog_auth_session";
+const authSessionMaxAgeSeconds = 30 * 24 * 60 * 60;
+
+type AuthSession = {
+  accessToken: string;
+  user: ApiUser;
+};
 
 const permissionLabels: Record<string, string> = {
   "user.manage": "用户管理",
@@ -226,8 +225,62 @@ function defaultContractCode() {
   return `CTR-${uniqueSuffix()}`;
 }
 
-function defaultManagerEmail() {
-  return `manager-${uniqueSuffix().toLowerCase()}@erpdog.local`;
+function isApiUser(value: unknown): value is ApiUser {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<ApiUser>;
+  return (
+    typeof candidate.email === "string" &&
+    typeof candidate.name === "string" &&
+    Array.isArray(candidate.permissions) &&
+    candidate.permissions.every((permission) => typeof permission === "string")
+  );
+}
+
+function readAuthSessionCookie(): AuthSession | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const prefix = `${authSessionCookieName}=`;
+  const raw = document.cookie
+    .split("; ")
+    .find((item) => item.startsWith(prefix))
+    ?.slice(prefix.length);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(decodeURIComponent(raw)) as Partial<AuthSession>;
+    if (typeof parsed.accessToken === "string" && isApiUser(parsed.user)) {
+      return { accessToken: parsed.accessToken, user: parsed.user };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function writeAuthSessionCookie(session: AuthSession) {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  const value = encodeURIComponent(JSON.stringify(session));
+  document.cookie = `${authSessionCookieName}=${value}; Max-Age=${authSessionMaxAgeSeconds}; Path=/; SameSite=Lax`;
+}
+
+function clearAuthSessionCookie() {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  document.cookie = `${authSessionCookieName}=; Max-Age=0; Path=/; SameSite=Lax`;
 }
 
 function translateErrorMessage(message: string) {
@@ -447,237 +500,11 @@ async function responseMessage(response: Response) {
   return text || response.statusText;
 }
 
-function createDemoData(periodMonth: string): ConsoleData {
-  const customerA: Customer = {
-    id: "demo-customer-qingliu",
-    code: "CUST-001",
-    name: "清流派科技",
-    fullName: "上海清流派科技有限公司",
-    status: "ACTIVE",
-  };
-  const customerB: Customer = {
-    id: "demo-customer-yunhe",
-    code: "CUST-002",
-    name: "云河供应链",
-    fullName: "杭州云河供应链有限公司",
-    status: "ACTIVE",
-  };
-  const contractA: Contract = {
-    id: "demo-contract-qingliu",
-    customerId: customerA.id,
-    code: "CTR-001",
-    name: "清流派月度运营服务合同",
-    status: "ACTIVE",
-    startDate: `${periodMonth}-01T00:00:00.000Z`,
-    endDate: "2026-12-31T00:00:00.000Z",
-    baseFee: "10000.00",
-    incentiveUnitPrice: "4.00",
-    serviceFeeRate: "8.0000",
-    tierMode: "ACCUMULATE",
-    tierRules: [
-      { description: "超出基础服务范围的增量部分按合同约定累加计费" },
-    ],
-    attachments: [],
-    customer: customerA,
-  };
-  const contractB: Contract = {
-    id: "demo-contract-yunhe",
-    customerId: customerB.id,
-    code: "CTR-002",
-    name: "云河供应链财务外包服务",
-    status: "ACTIVE",
-    startDate: `${periodMonth}-01T00:00:00.000Z`,
-    endDate: null,
-    baseFee: "8600.00",
-    incentiveUnitPrice: "3.50",
-    serviceFeeRate: "6.5000",
-    tierMode: "FULL_COVERAGE",
-    tierRules: [{ description: "达到约定业务量后整月服务费按覆盖规则重算" }],
-    attachments: [],
-    customer: customerB,
-  };
-  const billA: Bill = {
-    id: "demo-bill-qingliu",
-    billNo: `BILL-${periodMonth}-DEMO-CTR-001`,
-    periodMonth,
-    status: "CUSTOMER_CONFIRMED",
-    totalAmount: "18200.00",
-    subtotal: "18200.00",
-    invoiceAmount: "0.00",
-    receiptAmount: "10000.00",
-    customer: customerA,
-    contract: { id: contractA.id, code: contractA.code, name: contractA.name },
-    items: [
-      {
-        name: "基础服务费",
-        amount: "10000.00",
-        quantity: "1.0000",
-        lineTotal: "10000.00",
-      },
-      {
-        name: "月度运营执行",
-        description: "本月服务数量 1900",
-        amount: "4.00",
-        quantity: "1900.0000",
-        lineTotal: "7600.00",
-      },
-      {
-        name: "服务费",
-        description: "按合同服务费比例 8%",
-        amount: "600.00",
-        quantity: "1.0000",
-        lineTotal: "600.00",
-      },
-    ],
-  };
-  const billB: Bill = {
-    id: "demo-bill-yunhe",
-    billNo: `BILL-${periodMonth}-DEMO-CTR-002`,
-    periodMonth,
-    status: "CLOSED",
-    totalAmount: "12600.00",
-    subtotal: "12600.00",
-    invoiceAmount: "12600.00",
-    receiptAmount: "12600.00",
-    customer: customerB,
-    contract: { id: contractB.id, code: contractB.code, name: contractB.name },
-  };
-
-  return {
-    customers: [customerA, customerB],
-    contracts: [contractA, contractB],
-    bills: [billA, billB],
-    invoices: [
-      {
-        id: "demo-invoice-yunhe",
-        invoiceNo: `INV-${periodMonth}-001`,
-        status: "ISSUED",
-        amount: "12600.00",
-        issueDate: `${periodMonth}-18T00:00:00.000Z`,
-      },
-    ],
-    receipts: [
-      {
-        id: "demo-receipt-yunhe",
-        receiptNo: `RCPT-${periodMonth}-001`,
-        amount: "12600.00",
-        receivedAt: `${periodMonth}-21T00:00:00.000Z`,
-      },
-      {
-        id: "demo-receipt-qingliu",
-        receiptNo: `RCPT-${periodMonth}-002`,
-        amount: "10000.00",
-        receivedAt: `${periodMonth}-24T00:00:00.000Z`,
-      },
-    ],
-    costEntries: [
-      {
-        id: "demo-cost-qingliu",
-        amount: "4600.00",
-        periodMonth,
-        description: "外包执行服务",
-        customer: customerA,
-      },
-      {
-        id: "demo-cost-yunhe",
-        amount: "3900.00",
-        periodMonth,
-        description: "财务资料整理",
-        customer: customerB,
-      },
-    ],
-    payables: [
-      {
-        id: "demo-payable-qingliu",
-        vendorName: "上海砺行服务有限公司",
-        amount: "4600.00",
-        status: "PENDING",
-        customer: customerA,
-      },
-    ],
-    paymentRequests: [
-      {
-        id: "demo-payment-request-ops",
-        requestNo: `PR-${periodMonth}-DEMO-001`,
-        status: "SUBMITTED",
-        supplierName: "上海砺行服务有限公司",
-        requestedAmount: "4600.00",
-      },
-    ],
-    payments: [],
-    users: [
-      {
-        id: "demo-user-admin",
-        email: "admin@erpdog.local",
-        name: "Demo Admin",
-        isActive: true,
-        roles: [{ id: "demo-role-admin", code: "admin", name: "管理员" }],
-      },
-      {
-        id: "demo-user-owner",
-        email: "owner@erpdog.local",
-        name: "业务负责人",
-        isActive: true,
-        roles: [
-          {
-            id: "demo-role-customer-manager",
-            code: "customer_manager",
-            name: "客户负责人",
-          },
-        ],
-      },
-    ],
-    roles: [
-      { id: "demo-role-admin", code: "admin", name: "管理员" },
-      { id: "demo-role-finance", code: "finance", name: "财务" },
-      {
-        id: "demo-role-customer-manager",
-        code: "customer_manager",
-        name: "客户负责人",
-      },
-    ],
-    auditLogs: [
-      {
-        id: "demo-audit-bill",
-        action: "bill.customer_confirm",
-        entityType: "bill",
-        entityId: billA.id,
-        createdAt: `${periodMonth}-28T10:00:00.000Z`,
-        actor: { name: "Demo Admin", email: "admin@erpdog.local" },
-      },
-      {
-        id: "demo-audit-payment-request",
-        action: "payment_request.create",
-        entityType: "payment_request",
-        entityId: "demo-payment-request-ops",
-        createdAt: `${periodMonth}-29T10:00:00.000Z`,
-        actor: { name: "业务负责人", email: "owner@erpdog.local" },
-      },
-    ],
-    profits: [
-      {
-        customerName: customerA.name,
-        incomeAmount: "18200.00",
-        costAmount: "4600.00",
-        profitAmount: "13600.00",
-        grossMargin: "74.73%",
-      },
-      {
-        customerName: customerB.name,
-        incomeAmount: "12600.00",
-        costAmount: "3900.00",
-        profitAmount: "8700.00",
-        grossMargin: "69.05%",
-      },
-    ],
-  };
-}
-
 export default function Home() {
   const [token, setToken] = useState("");
   const [user, setUser] = useState<ApiUser | null>(null);
-  const [demoMode, setDemoMode] = useState(false);
-  const [message, setMessage] = useState("等待登录或进入演示");
+  const [message, setMessage] = useState(loginRequiredMessage);
+  const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [active, setActive] = useState<ModuleId>("dashboard");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -732,10 +559,11 @@ export default function Home() {
     null,
   );
   const [receiptAccount, setReceiptAccount] = useState("默认收款账户");
-  const [newUserEmail, setNewUserEmail] = useState(defaultManagerEmail);
-  const [newUserName, setNewUserName] = useState("客户负责人");
-  const [newUserPassword, setNewUserPassword] = useState("ChangeMe123!");
-  const [newUserRoleCode, setNewUserRoleCode] = useState("customer_manager");
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserRoleCode, setNewUserRoleCode] = useState("");
 
   const selectedBill = bills.find((bill) => bill.id === selectedBillId);
   const selectedContract = contracts.find(
@@ -748,15 +576,12 @@ export default function Home() {
     (contract) => contract.id === editingContractId,
   );
   const activeModule = modules.find((module) => module.id === active)!;
-  const isLoggedIn = Boolean(token && user && !demoMode);
+  const isLoggedIn = Boolean(token && user);
   const hasPermission = (...permissions: string[]) =>
     permissions.length === 0 ||
     (user?.permissions.some((permission) => permissions.includes(permission)) ??
       false);
   const actionBlockReason = (...permissions: string[]) => {
-    if (demoMode) {
-      return "";
-    }
     if (!isLoggedIn) {
       return loginRequiredMessage;
     }
@@ -869,20 +694,37 @@ export default function Home() {
     );
   }
 
-  function enterDemoMode(nextPeriodMonth = periodMonth) {
-    setDemoMode(true);
-    setToken(demoToken);
-    setUser(demoUser);
-    applyConsoleData(createDemoData(nextPeriodMonth));
-    setMessage("静态预览：演示数据只用于理解流程");
-  }
+  useEffect(() => {
+    const cachedSession = readAuthSessionCookie();
+    if (!cachedSession) {
+      return;
+    }
+
+    setToken(cachedSession.accessToken);
+    setUser(cachedSession.user);
+    setMessage(`正在恢复登录态：${cachedSession.user.name}`);
+    void refresh(cachedSession.accessToken, cachedSession.user).catch(
+      (error: unknown) =>
+        setMessage(
+          error instanceof Error
+            ? translateErrorMessage(error.message)
+            : authExpiredMessage,
+        ),
+    );
+  }, []);
 
   function resetSession(message = authExpiredMessage) {
-    setDemoMode(false);
     setToken("");
     setUser(null);
+    clearAuthSessionCookie();
     applyConsoleData(emptyConsoleData());
     setMessage(message);
+  }
+
+  function logout() {
+    resetSession(loginRequiredMessage);
+    setPassword("");
+    setLoginDialogOpen(false);
   }
 
   async function request<T>(
@@ -890,10 +732,6 @@ export default function Home() {
     init?: RequestInit,
     options: { auth?: boolean } = {},
   ): Promise<T> {
-    if (demoMode) {
-      throw new Error("演示模式不会写入后端；正式使用请连接 API 后登录");
-    }
-
     const useAuth = options.auth ?? true;
     const response = await fetch(`${apiBase}${path}`, {
       ...init,
@@ -918,13 +756,8 @@ export default function Home() {
   }
 
   async function refresh(nextToken = token, nextUser = user) {
-    if (demoMode || nextToken === demoToken) {
-      enterDemoMode(periodMonth);
-      return;
-    }
-
     if (!nextToken) {
-      setMessage("请先登录正式 API，或进入演示了解流程");
+      setMessage(loginRequiredMessage);
       return;
     }
 
@@ -1065,17 +898,31 @@ export default function Home() {
         },
         { auth: false },
       );
-      setDemoMode(false);
+      writeAuthSessionCookie({
+        accessToken: result.accessToken,
+        user: result.user,
+      });
       setToken(result.accessToken);
       setUser(result.user);
+      setPassword("");
+      setLoginDialogOpen(false);
       setMessage(`已登录：${result.user.name}`);
-      await refresh(result.accessToken, result.user);
+      try {
+        await refresh(result.accessToken, result.user);
+      } catch (refreshError) {
+        setMessage(
+          refreshError instanceof Error
+            ? `已登录，但刷新数据失败：${translateErrorMessage(refreshError.message)}`
+            : `已登录：${result.user.name}`,
+        );
+      }
     } catch (error) {
       setMessage(
         error instanceof Error
           ? `登录失败：${translateErrorMessage(error.message)}`
           : "登录失败，请检查后端服务",
       );
+      setLoginDialogOpen(true);
     }
   }
 
@@ -1112,11 +959,6 @@ export default function Home() {
       }
 
       setMessage(`${label}处理中`);
-      if (demoMode) {
-        setMessage(`${label}：演示模式仅展示流程，正式模式会写入后端`);
-        return;
-      }
-
       const result = await action();
       await refresh();
       setMessage(summarizeAction(label, result));
@@ -1165,6 +1007,32 @@ export default function Home() {
   function closeCustomerDialog() {
     setCustomerDialogOpen(false);
     setEditingCustomerId(null);
+  }
+
+  function resetUserForm() {
+    setNewUserEmail("");
+    setNewUserName("");
+    setNewUserPassword("");
+    setNewUserRoleCode(roles[0]?.code ?? "");
+  }
+
+  function openCreateUserDialog() {
+    const blockedReason = actionBlockReason("user.manage");
+    if (blockedReason) {
+      setMessage(`新建内部用户失败：${blockedReason}`);
+      return;
+    }
+    if (roles.length === 0) {
+      setMessage("新建内部用户失败：请先确认系统角色已初始化。");
+      return;
+    }
+
+    resetUserForm();
+    setUserDialogOpen(true);
+  }
+
+  function closeUserDialog() {
+    setUserDialogOpen(false);
   }
 
   function resetContractForm(nextCustomerId = selectedCustomerId) {
@@ -1339,8 +1207,12 @@ export default function Home() {
 
   function createConsoleUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!newUserEmail.trim() || !newUserName.trim()) {
-      setMessage("创建用户失败：邮箱和姓名不能为空。");
+    if (
+      !newUserEmail.trim() ||
+      !newUserName.trim() ||
+      !newUserPassword.trim()
+    ) {
+      setMessage("创建用户失败：邮箱、姓名和初始密码不能为空。");
       return;
     }
     if (!newUserRoleCode) {
@@ -1358,7 +1230,8 @@ export default function Home() {
           roleCodes: [newUserRoleCode],
         }),
       });
-      setNewUserEmail(defaultManagerEmail());
+      setUserDialogOpen(false);
+      resetUserForm();
       return result;
     });
   }
@@ -1829,7 +1702,6 @@ export default function Home() {
         </nav>
         <div className="session">
           <span>{user?.name ?? "未登录"}</span>
-          {demoMode ? <small className="mode-pill">静态预览</small> : null}
           <small>{message}</small>
         </div>
       </aside>
@@ -1838,76 +1710,117 @@ export default function Home() {
         <header className="topbar">
           <div>
             <h1>{activeModule.title}</h1>
-            <p>
-              {periodMonth}
-              {demoMode ? " · Demo 数据" : " · 正式 API 模式"}
-            </p>
+            <p>{periodMonth} · 正式 API 模式</p>
           </div>
-          <div className="toolbar">
-            <input
-              aria-label="账期"
-              onChange={(event) => setPeriodMonth(event.target.value)}
-              value={periodMonth}
-            />
-            <button
-              onClick={() =>
-                void refresh().catch((error: unknown) =>
-                  setMessage(
-                    error instanceof Error ? error.message : "刷新失败",
-                  ),
-                )
-              }
-              type="button"
-            >
-              刷新
-            </button>
+          <div className="topbar-actions">
+            <div className="toolbar">
+              <input
+                aria-label="账期"
+                onChange={(event) => setPeriodMonth(event.target.value)}
+                value={periodMonth}
+              />
+              <button
+                onClick={() =>
+                  void refresh().catch((error: unknown) =>
+                    setMessage(
+                      error instanceof Error ? error.message : "刷新失败",
+                    ),
+                  )
+                }
+                type="button"
+              >
+                刷新
+              </button>
+            </div>
+            <div className="auth-actions">
+              {isLoggedIn ? (
+                <>
+                  <span className="auth-chip">{user?.name}</span>
+                  <button onClick={logout} type="button">
+                    退出
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="primary"
+                  onClick={() => setLoginDialogOpen(true)}
+                  type="button"
+                >
+                  登录正式系统
+                </button>
+              )}
+            </div>
           </div>
         </header>
 
         <section className="mode-banner">
-          <strong>
-            {demoMode ? "当前是静态演示" : "当前连接正式后端 API"}
-          </strong>
+          <strong>当前连接正式后端 API</strong>
           <span>
-            {demoMode
-              ? "演示数据只用于理解流程，正式业务请退出演示并登录后端账号。"
-              : "登录后会读取真实数据库数据，创建、审核、结账等操作会写入后端系统。"}
+            登录后会读取真实数据库数据，创建、审核、结账等操作会写入后端系统。
           </span>
         </section>
 
-        {!token ? (
-          <section className="panel login-panel">
-            <form onSubmit={(event) => void login(event)}>
-              <label>
-                邮箱
-                <input
-                  autoComplete="email"
-                  onChange={(event) => setEmail(event.target.value)}
-                  value={email}
-                />
-              </label>
-              <label>
-                密码
-                <input
-                  autoComplete="current-password"
-                  onChange={(event) => setPassword(event.target.value)}
-                  placeholder="输入管理员或内部用户密码"
-                  type="password"
-                  value={password}
-                />
-              </label>
-              <button className="primary" type="submit">
-                登录正式系统
-              </button>
-              <button
-                className="secondary"
-                onClick={() => enterDemoMode()}
-                type="button"
+        {loginDialogOpen ? (
+          <div
+            aria-modal="true"
+            className="modal-backdrop"
+            onMouseDown={() => setLoginDialogOpen(false)}
+            role="dialog"
+          >
+            <div
+              className="modal-panel"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="panel-header">
+                <h2>登录正式系统</h2>
+                <button
+                  aria-label="关闭"
+                  className="icon-button"
+                  onClick={() => setLoginDialogOpen(false)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <form
+                className="module-form"
+                onSubmit={(event) => void login(event)}
               >
-                进入演示
-              </button>
-            </form>
-          </section>
+                <label>
+                  邮箱
+                  <input
+                    autoComplete="email"
+                    onChange={(event) => setEmail(event.target.value)}
+                    value={email}
+                  />
+                </label>
+                <label>
+                  密码
+                  <input
+                    autoComplete="current-password"
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="输入管理员或内部用户密码"
+                    type="password"
+                    value={password}
+                  />
+                </label>
+                <small className="form-note">
+                  登录成功后将在当前浏览器保持 30 天登录态。
+                </small>
+                <div className="modal-actions">
+                  <button
+                    onClick={() => setLoginDialogOpen(false)}
+                    type="button"
+                  >
+                    取消
+                  </button>
+                  <button className="primary" type="submit">
+                    登录
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         ) : null}
 
         {active === "dashboard" ? (
@@ -1921,23 +1834,26 @@ export default function Home() {
         ) : null}
 
         {active === "activation" ? (
-          <ActivationModule apiBase={apiBase} demoMode={demoMode} />
+          <ActivationModule apiBase={apiBase} />
         ) : null}
 
         {active === "identity" ? (
           <IdentityModule
             auditLogs={auditLogs}
+            closeUserDialog={closeUserDialog}
             createConsoleUser={createConsoleUser}
             disabledReason={actionBlockReason("user.manage")}
             newUserEmail={newUserEmail}
             newUserName={newUserName}
             newUserPassword={newUserPassword}
             newUserRoleCode={newUserRoleCode}
+            openCreateUserDialog={openCreateUserDialog}
             roles={roles}
             setNewUserEmail={setNewUserEmail}
             setNewUserName={setNewUserName}
             setNewUserPassword={setNewUserPassword}
             setNewUserRoleCode={setNewUserRoleCode}
+            userDialogOpen={userDialogOpen}
             users={users}
           />
         ) : null}
@@ -2168,19 +2084,13 @@ function DashboardModule({
   );
 }
 
-function ActivationModule({
-  apiBase,
-  demoMode,
-}: {
-  apiBase: string;
-  demoMode: boolean;
-}) {
+function ActivationModule({ apiBase }: { apiBase: string }) {
   return (
     <section className="workspace two-column">
       <div className="panel">
         <div className="panel-header">
           <h2>正式启用清单</h2>
-          <span>{demoMode ? "当前仍是预览" : "连接目标 API"}</span>
+          <span>连接目标 API</span>
         </div>
         <ol className="check-list">
           <li>部署 PostgreSQL、Redis、API、Worker、Web 和对象存储。</li>
@@ -2203,13 +2113,11 @@ function ActivationModule({
           </div>
           <div>
             <span>页面角色</span>
-            <strong>{demoMode ? "静态预览" : "正式入口"}</strong>
+            <strong>正式入口</strong>
           </div>
           <div>
             <span>生产状态</span>
-            <strong>
-              {demoMode ? "等待连接正式后端" : "已连接 Web/API/Worker/数据库"}
-            </strong>
+            <strong>已连接 Web/API/Worker/数据库</strong>
           </div>
         </div>
       </div>
@@ -2219,90 +2127,58 @@ function ActivationModule({
 
 function IdentityModule({
   auditLogs,
+  closeUserDialog,
   createConsoleUser,
   disabledReason,
   newUserEmail,
   newUserName,
   newUserPassword,
   newUserRoleCode,
+  openCreateUserDialog,
   roles,
   setNewUserEmail,
   setNewUserName,
   setNewUserPassword,
   setNewUserRoleCode,
+  userDialogOpen,
   users,
 }: {
   auditLogs: AuditLog[];
+  closeUserDialog: () => void;
   createConsoleUser: (event: FormEvent<HTMLFormElement>) => void;
   disabledReason: string;
   newUserEmail: string;
   newUserName: string;
   newUserPassword: string;
   newUserRoleCode: string;
+  openCreateUserDialog: () => void;
   roles: Role[];
   setNewUserEmail: (value: string) => void;
   setNewUserName: (value: string) => void;
   setNewUserPassword: (value: string) => void;
   setNewUserRoleCode: (value: string) => void;
+  userDialogOpen: boolean;
   users: ConsoleUser[];
 }) {
   return (
-    <section className="workspace two-column">
-      <div className="panel">
-        <div className="panel-header">
-          <h2>新建内部用户</h2>
-          <span>正式启用必做</span>
-        </div>
-        <form className="module-form" onSubmit={createConsoleUser}>
-          <label>
-            邮箱
-            <input
-              onChange={(event) => setNewUserEmail(event.target.value)}
-              value={newUserEmail}
-            />
-          </label>
-          <label>
-            姓名
-            <input
-              onChange={(event) => setNewUserName(event.target.value)}
-              value={newUserName}
-            />
-          </label>
-          <label>
-            初始密码
-            <input
-              onChange={(event) => setNewUserPassword(event.target.value)}
-              type="password"
-              value={newUserPassword}
-            />
-          </label>
-          <label>
-            角色
-            <select
-              onChange={(event) => setNewUserRoleCode(event.target.value)}
-              value={newUserRoleCode}
-            >
-              {roles.map((role) => (
-                <option key={role.id} value={role.code}>
-                  {role.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {disabledReason ? (
-            <small className="form-note">{disabledReason}</small>
-          ) : null}
+    <section className="workspace">
+      <TablePanel
+        action={
           <button
             className="primary"
             disabled={Boolean(disabledReason)}
-            type="submit"
+            onClick={openCreateUserDialog}
+            type="button"
           >
-            创建用户
+            新建内部用户
           </button>
-        </form>
-      </div>
-
-      <TablePanel title="内部用户" count={`${users.length} 个`}>
+        }
+        count={`${users.length} 个`}
+        title="内部用户"
+      >
+        {disabledReason ? (
+          <div className="inline-notice">{disabledReason}</div>
+        ) : null}
         <table>
           <thead>
             <tr>
@@ -2328,6 +2204,90 @@ function IdentityModule({
           </tbody>
         </table>
       </TablePanel>
+
+      {userDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeUserDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>新建内部用户</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeUserDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={createConsoleUser}>
+              <label>
+                邮箱
+                <input
+                  autoComplete="email"
+                  onChange={(event) => setNewUserEmail(event.target.value)}
+                  placeholder="例如 user@company.com"
+                  value={newUserEmail}
+                />
+              </label>
+              <label>
+                姓名
+                <input
+                  onChange={(event) => setNewUserName(event.target.value)}
+                  placeholder="内部用户姓名"
+                  value={newUserName}
+                />
+              </label>
+              <label>
+                初始密码
+                <input
+                  autoComplete="new-password"
+                  onChange={(event) => setNewUserPassword(event.target.value)}
+                  placeholder="至少 10 位"
+                  type="password"
+                  value={newUserPassword}
+                />
+              </label>
+              <label>
+                角色
+                <select
+                  onChange={(event) => setNewUserRoleCode(event.target.value)}
+                  value={newUserRoleCode}
+                >
+                  <option value="">选择角色</option>
+                  {roles.map((role) => (
+                    <option key={role.id} value={role.code}>
+                      {role.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {disabledReason ? (
+                <small className="form-note">{disabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeUserDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(disabledReason)}
+                  type="submit"
+                >
+                  创建用户
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
 
       <TablePanel title="角色权限" count={`${roles.length} 个角色`}>
         <table>

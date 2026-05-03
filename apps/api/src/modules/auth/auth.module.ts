@@ -33,7 +33,7 @@ function parseTtlSeconds(value: string): number {
         secret: config.getOrThrow<string>("JWT_SECRET"),
         signOptions: {
           expiresIn: parseTtlSeconds(
-            config.get<string>("JWT_ACCESS_TTL", "15m"),
+            config.get<string>("JWT_ACCESS_TTL", "30d"),
           ),
         },
       }),
