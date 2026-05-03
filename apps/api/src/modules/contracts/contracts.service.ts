@@ -40,9 +40,9 @@ type ContractFilters = {
 } & PaginationQuery;
 
 const CONTRACT_IMPORT_HEADERS = [
-  "合同编码",
   "合同名称",
   "客户编码",
+  "签约主体编号",
   "状态",
   "开始日期",
   "结束日期",
@@ -59,6 +59,8 @@ const CONTRACT_IMPORT_HEADERS = [
   "失效日",
   "是否启用",
 ];
+
+const contractCodePrefix = "HT";
 
 @Injectable()
 export class ContractsService {
@@ -116,18 +118,26 @@ export class ContractsService {
   async create(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
     const customerId = stringField(body, "customerId");
-    await this.customers.ensureCustomerAccess(user, customerId);
+    const customer = await this.customers.ensureCustomerAccess(
+      user,
+      customerId,
+    );
+    const signingEntityId = stringField(body, "signingEntityId");
+    await this.ensureSigningEntity(user, signingEntityId);
     const chargeItems = arrayField<Payload>(body, "chargeItems");
     const startDate = dateField(body, "startDate");
     const endDate = optionalDate(body, "endDate");
 
     const contract = await this.prisma.$transaction(async (tx) => {
+      const code = await this.nextContractCode(tx, user.orgId, startDate);
       const created = await tx.contract.create({
         data: {
           orgId: user.orgId,
           customerId,
-          code: stringField(body, "code"),
-          name: stringField(body, "name"),
+          signingEntityId,
+          code,
+          name:
+            optionalString(body, "name") ?? `${customer.name} ${code} 服务合同`,
           status: this.statusFromPeriod(startDate, endDate),
           startDate,
           endDate,
@@ -171,6 +181,11 @@ export class ContractsService {
     const body = bodyObject(rawBody);
     const customerId = optionalString(body, "customerId") ?? before.customerId;
     await this.customers.ensureCustomerAccess(user, customerId);
+    const signingEntityId =
+      optionalString(body, "signingEntityId") ?? before.signingEntityId;
+    if (signingEntityId) {
+      await this.ensureSigningEntity(user, signingEntityId);
+    }
     const startDate = optionalDate(body, "startDate") ?? before.startDate;
     const endDate =
       body.endDate === null
@@ -182,7 +197,8 @@ export class ContractsService {
         where: { id },
         data: {
           customerId,
-          code: optionalString(body, "code") ?? before.code,
+          signingEntityId,
+          code: before.code,
           name: optionalString(body, "name") ?? before.name,
           status: this.statusFromPeriod(startDate, endDate),
           startDate,
@@ -389,8 +405,9 @@ export class ContractsService {
         name: "字段说明",
         headers: ["字段", "说明"],
         rows: [
-          { 字段: "合同编码", 说明: "必填，同一组织内唯一。" },
+          { 字段: "合同编码", 说明: "系统自动生成，导入时无需填写。" },
           { 字段: "客户编码", 说明: "必填，必须匹配已存在客户编码。" },
+          { 字段: "签约主体编号", 说明: "必填，必须匹配已存在签约主体编号。" },
           {
             字段: "状态",
             说明: "可选：DRAFT/ACTIVE/SUSPENDED/EXPIRED/TERMINATED。",
@@ -401,7 +418,7 @@ export class ContractsService {
           },
           {
             字段: "多收费项",
-            说明: "同一合同编码可填写多行，每行会作为一个收费项。",
+            说明: "需要导入多收费项时，可填写同一合同编码作为分组标识；未填写则每行生成一份合同。",
           },
         ],
       },
@@ -424,12 +441,8 @@ export class ContractsService {
     let invalidRowCount = 0;
 
     for (const { rowNumber, row } of rows) {
-      const code = this.cell(row, ["合同编码", "code", "Code"]);
-      if (!code) {
-        invalidRowCount += 1;
-        results.push({ row: rowNumber, error: "合同编码 is required." });
-        continue;
-      }
+      const code =
+        this.cell(row, ["合同编码", "code", "Code"]) ?? `__row_${rowNumber}`;
 
       const group = grouped.get(code) ?? {
         rowNumber,
@@ -831,6 +844,16 @@ export class ContractsService {
           fullName: true,
         },
       },
+      signingEntity: {
+        select: {
+          id: true,
+          code: true,
+          shortName: true,
+          fullName: true,
+          legalRepresentative: true,
+          taxpayerType: true,
+        },
+      },
       attachments: {
         orderBy: { createdAt: "desc" },
         select: {
@@ -844,6 +867,41 @@ export class ContractsService {
         orderBy: { createdAt: "asc" },
       },
     } satisfies Prisma.ContractInclude;
+  }
+
+  private async ensureSigningEntity(
+    user: AuthenticatedUser,
+    signingEntityId: string,
+  ) {
+    const signingEntity = await this.prisma.signingEntity.findFirst({
+      where: { id: signingEntityId, orgId: user.orgId },
+    });
+    if (!signingEntity) {
+      throw new NotFoundException("Signing entity not found.");
+    }
+
+    return signingEntity;
+  }
+
+  private async nextContractCode(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+    startDate: Date,
+  ) {
+    const year = startDate.getFullYear().toString().slice(-2);
+    const prefix = `${contractCodePrefix}${year}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`contract-code:${orgId}:${prefix}`}))`;
+    const existing = await tx.contract.findMany({
+      where: { orgId, code: { startsWith: prefix } },
+      select: { code: true },
+    });
+    const nextNumber =
+      existing.reduce((max, item) => {
+        const match = new RegExp(`^${prefix}(\\d+)$`).exec(item.code);
+        return match?.[1] ? Math.max(max, Number(match[1])) : max;
+      }, 0) + 1;
+
+    return `${prefix}${nextNumber.toString().padStart(3, "0")}`;
   }
 
   private async contractImportPayload(
@@ -869,8 +927,8 @@ export class ContractsService {
 
     return {
       customerId: customer.id,
-      code: this.cell(group.row, ["合同编码", "code", "Code"]),
       name: this.cell(group.row, ["合同名称", "name", "Name"]),
+      signingEntityId: await this.signingEntityIdFromImportRow(user, group.row),
       status: this.contractStatusFromCell(
         this.cell(group.row, ["状态", "status"]),
       ),
@@ -881,6 +939,30 @@ export class ContractsService {
       notes: this.cell(group.row, ["合同备注", "notes"]),
       chargeItems: group.chargeItems,
     };
+  }
+
+  private async signingEntityIdFromImportRow(
+    user: AuthenticatedUser,
+    row: Record<string, unknown>,
+  ) {
+    const code = this.cell(row, [
+      "签约主体编号",
+      "我方签约主体编号",
+      "signingEntityCode",
+    ]);
+    if (!code) {
+      throw new BadRequestException("签约主体编号 is required.");
+    }
+
+    const signingEntity = await this.prisma.signingEntity.findFirst({
+      where: { orgId: user.orgId, code },
+      select: { id: true },
+    });
+    if (!signingEntity) {
+      throw new NotFoundException(`Signing entity not found: ${code}`);
+    }
+
+    return signingEntity.id;
   }
 
   private chargeItemImportPayload(row: Record<string, unknown>) {

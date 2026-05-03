@@ -40,6 +40,7 @@ type ContractTierRule = {
 type Contract = {
   id: string;
   customerId?: string;
+  signingEntityId?: string | null;
   code: string;
   name: string;
   status: string;
@@ -53,6 +54,21 @@ type Contract = {
   attachments?: ContractAttachment[];
   chargeItems?: Array<{ amount: string; name: string }>;
   customer?: Customer;
+  signingEntity?: SigningEntity | null;
+};
+
+type TaxpayerType = "SMALL_SCALE" | "GENERAL" | "OVERSEAS";
+
+type SigningEntity = {
+  id: string;
+  orgId?: string;
+  code: string;
+  shortName: string;
+  fullName: string;
+  legalRepresentative: string;
+  taxpayerType: TaxpayerType;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 type Bill = {
@@ -169,6 +185,7 @@ type ProfitRow = {
 
 type ConsoleData = {
   customers: Customer[];
+  signingEntities: SigningEntity[];
   contracts: Contract[];
   bills: Bill[];
   invoices: Invoice[];
@@ -213,16 +230,36 @@ const apiBase = configuredApiBase
   ? configuredApiBase.replace(/\/$/, "")
   : "/api/v1";
 
-function uniqueSuffix() {
-  return Date.now().toString(36).toUpperCase();
+function nextSequentialCode(
+  items: Array<{ code: string }>,
+  prefix: string,
+  width = 3,
+) {
+  const nextNumber =
+    items.reduce((max, item) => {
+      const match = new RegExp(`^${prefix}(\\d+)$`).exec(item.code);
+      return match?.[1] ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+
+  return `${prefix}${nextNumber.toString().padStart(width, "0")}`;
 }
 
-function defaultCustomerCode() {
-  return `CUST-${uniqueSuffix()}`;
+function nextCustomerCode(customers: Customer[]) {
+  return nextSequentialCode(customers, "KH");
 }
 
-function defaultContractCode() {
-  return `CTR-${uniqueSuffix()}`;
+function nextSigningEntityCode(signingEntities: SigningEntity[]) {
+  return nextSequentialCode(signingEntities, "ZT");
+}
+
+function contractYearPrefix(startDate: string) {
+  const year = Number(startDate.slice(0, 4));
+  const fallbackYear = new Date().getFullYear();
+  return `HT${(Number.isFinite(year) ? year : fallbackYear).toString().slice(-2)}`;
+}
+
+function nextContractCode(contracts: Contract[], startDate: string) {
+  return nextSequentialCode(contracts, contractYearPrefix(startDate));
 }
 
 function isApiUser(value: unknown): value is ApiUser {
@@ -290,6 +327,18 @@ function translateErrorMessage(message: string) {
   if (/You do not have permission/i.test(message)) {
     return "当前账号没有权限执行此操作。";
   }
+  if (/Customer already exists/i.test(message)) {
+    return "该客户已存在，不能重复新建。";
+  }
+  if (/Signing entity already exists/i.test(message)) {
+    return "该签约主体已存在，不能重复新建。";
+  }
+  if (/Signing entity not found|signingEntityId is required/i.test(message)) {
+    return "请选择有效签约主体。";
+  }
+  if (/Signing entity is already used/i.test(message)) {
+    return "该签约主体已被合同使用，不能删除。";
+  }
   if (/Unique constraint failed|already exists/i.test(message)) {
     return "编码或邮箱已存在，请换一个。";
   }
@@ -317,6 +366,7 @@ const modules = [
   { id: "activation", label: "正式启用", title: "正式启用路径" },
   { id: "identity", label: "用户权限", title: "用户、角色与审计" },
   { id: "customers", label: "客户", title: "客户管理" },
+  { id: "signingEntities", label: "签约主体", title: "签约主体管理" },
   { id: "contracts", label: "合同", title: "合同管理" },
   { id: "billing", label: "账单", title: "账单中心" },
   { id: "receivables", label: "应收", title: "发票与收款" },
@@ -337,6 +387,12 @@ const billStatusText: Record<string, string> = {
   VOIDED: "已作废",
 };
 
+const taxpayerTypeText: Record<TaxpayerType, string> = {
+  SMALL_SCALE: "小规模纳税人",
+  GENERAL: "一般纳税人",
+  OVERSEAS: "海外主体",
+};
+
 function money(value: string | number | undefined) {
   return `¥${Number(value ?? 0).toLocaleString("zh-CN", {
     minimumFractionDigits: 2,
@@ -355,6 +411,7 @@ function emptyPage<T>(): PaginatedResponse<T> {
 function emptyConsoleData(): ConsoleData {
   return {
     customers: [],
+    signingEntities: [],
     contracts: [],
     bills: [],
     invoices: [],
@@ -507,6 +564,7 @@ export default function Home() {
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [active, setActive] = useState<ModuleId>("dashboard");
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [signingEntities, setSigningEntities] = useState<SigningEntity[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [bills, setBills] = useState<Bill[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -522,14 +580,27 @@ export default function Home() {
   const [email, setEmail] = useState("admin@erpdog.local");
   const [password, setPassword] = useState("");
   const [periodMonth, setPeriodMonth] = useState("2026-04");
-  const [customerCode, setCustomerCode] = useState(defaultCustomerCode);
+  const [customerCode, setCustomerCode] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerFullName, setCustomerFullName] = useState("");
   const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(
     null,
   );
-  const [contractCode, setContractCode] = useState(defaultContractCode);
+  const [signingEntityCode, setSigningEntityCode] = useState("");
+  const [signingEntityShortName, setSigningEntityShortName] = useState("");
+  const [signingEntityFullName, setSigningEntityFullName] = useState("");
+  const [
+    signingEntityLegalRepresentative,
+    setSigningEntityLegalRepresentative,
+  ] = useState("");
+  const [signingEntityTaxpayerType, setSigningEntityTaxpayerType] =
+    useState<TaxpayerType>("SMALL_SCALE");
+  const [signingEntityDialogOpen, setSigningEntityDialogOpen] = useState(false);
+  const [editingSigningEntityId, setEditingSigningEntityId] = useState<
+    string | null
+  >(null);
+  const [contractCode, setContractCode] = useState("");
   const [contractFee, setContractFee] = useState("10000.00");
   const [contractDialogOpen, setContractDialogOpen] = useState(false);
   const [editingContractId, setEditingContractId] = useState<string | null>(
@@ -546,6 +617,7 @@ export default function Home() {
   const [contractTierDescription, setContractTierDescription] = useState("");
   const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [selectedSigningEntityId, setSelectedSigningEntityId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
   const [selectedBillId, setSelectedBillId] = useState("");
   const [billDialogOpen, setBillDialogOpen] = useState(false);
@@ -571,6 +643,9 @@ export default function Home() {
   );
   const editingCustomer = customers.find(
     (customer) => customer.id === editingCustomerId,
+  );
+  const editingSigningEntity = signingEntities.find(
+    (entity) => entity.id === editingSigningEntityId,
   );
   const editingContract = contracts.find(
     (contract) => contract.id === editingContractId,
@@ -660,6 +735,7 @@ export default function Home() {
 
   function applyConsoleData(data: ConsoleData) {
     setCustomers(data.customers);
+    setSigningEntities(data.signingEntities);
     setContracts(data.contracts);
     setBills(data.bills);
     setInvoices(data.invoices);
@@ -676,6 +752,11 @@ export default function Home() {
       data.customers.some((customer) => customer.id === current)
         ? current
         : (data.customers[0]?.id ?? ""),
+    );
+    setSelectedSigningEntityId((current) =>
+      data.signingEntities.some((entity) => entity.id === current)
+        ? current
+        : (data.signingEntities[0]?.id ?? ""),
     );
     setSelectedContractId((current) =>
       data.contracts.some((contract) => contract.id === current)
@@ -790,6 +871,7 @@ export default function Home() {
 
     const [
       nextCustomers,
+      nextSigningEntities,
       nextContracts,
       nextBills,
       nextInvoices,
@@ -807,6 +889,11 @@ export default function Home() {
         can("customer.read_all", "customer.read_own"),
         "/customers?pageSize=50",
         emptyPage<Customer>(),
+      ),
+      fetchIf<SigningEntity[] | PaginatedResponse<SigningEntity>>(
+        can("customer.read_all", "customer.read_own"),
+        "/signing-entities?pageSize=50",
+        emptyPage<SigningEntity>(),
       ),
       fetchIf<Contract[] | PaginatedResponse<Contract>>(
         can("customer.read_all", "customer.read_own"),
@@ -868,6 +955,7 @@ export default function Home() {
 
     applyConsoleData({
       customers: listItems(nextCustomers),
+      signingEntities: listItems(nextSigningEntities),
       contracts: listItems(nextContracts),
       bills: listItems(nextBills),
       invoices: listItems(nextInvoices),
@@ -972,7 +1060,7 @@ export default function Home() {
   }
 
   function resetCustomerForm() {
-    setCustomerCode(defaultCustomerCode());
+    setCustomerCode(nextCustomerCode(customers));
     setCustomerName("");
     setCustomerFullName("");
     setEditingCustomerId(null);
@@ -1035,10 +1123,53 @@ export default function Home() {
     setUserDialogOpen(false);
   }
 
+  function resetSigningEntityForm() {
+    setSigningEntityCode(nextSigningEntityCode(signingEntities));
+    setSigningEntityShortName("");
+    setSigningEntityFullName("");
+    setSigningEntityLegalRepresentative("");
+    setSigningEntityTaxpayerType("SMALL_SCALE");
+    setEditingSigningEntityId(null);
+  }
+
+  function openCreateSigningEntityDialog() {
+    const blockedReason = actionBlockReason("contract.write");
+    if (blockedReason) {
+      setMessage(`新增主体失败：${blockedReason}`);
+      return;
+    }
+
+    resetSigningEntityForm();
+    setSigningEntityDialogOpen(true);
+  }
+
+  function openEditSigningEntityDialog(entity: SigningEntity) {
+    const blockedReason = actionBlockReason("contract.write");
+    if (blockedReason) {
+      setMessage(`编辑主体失败：${blockedReason}`);
+      return;
+    }
+
+    setSelectedSigningEntityId(entity.id);
+    setEditingSigningEntityId(entity.id);
+    setSigningEntityCode(entity.code);
+    setSigningEntityShortName(entity.shortName);
+    setSigningEntityFullName(entity.fullName);
+    setSigningEntityLegalRepresentative(entity.legalRepresentative);
+    setSigningEntityTaxpayerType(entity.taxpayerType);
+    setSigningEntityDialogOpen(true);
+  }
+
+  function closeSigningEntityDialog() {
+    setSigningEntityDialogOpen(false);
+    setEditingSigningEntityId(null);
+  }
+
   function resetContractForm(nextCustomerId = selectedCustomerId) {
-    setContractCode(defaultContractCode());
+    const nextStartDate = `${periodMonth}-01`;
+    setContractCode(nextContractCode(contracts, nextStartDate));
     setContractFee("10000.00");
-    setContractStartDate(`${periodMonth}-01`);
+    setContractStartDate(nextStartDate);
     setContractEndDate("");
     setContractIncentiveUnitPrice("0.00");
     setContractServiceFeeRate("0");
@@ -1047,6 +1178,7 @@ export default function Home() {
     setContractFiles([]);
     setEditingContractId(null);
     setSelectedCustomerId(nextCustomerId || customers[0]?.id || "");
+    setSelectedSigningEntityId(signingEntities[0]?.id || "");
   }
 
   function openCreateContractDialog() {
@@ -1057,6 +1189,10 @@ export default function Home() {
     }
     if (customers.length === 0) {
       setMessage("新增合同失败：请先创建客户。");
+      return;
+    }
+    if (signingEntities.length === 0) {
+      setMessage("新增合同失败：请先创建签约主体。");
       return;
     }
 
@@ -1074,6 +1210,9 @@ export default function Home() {
     const firstRule = contract.tierRules?.[0];
     setSelectedContractId(contract.id);
     setSelectedCustomerId(contract.customerId ?? contract.customer?.id ?? "");
+    setSelectedSigningEntityId(
+      contract.signingEntityId ?? contract.signingEntity?.id ?? "",
+    );
     setEditingContractId(contract.id);
     setContractCode(contract.code);
     setContractFee(contractBaseFee(contract));
@@ -1087,6 +1226,13 @@ export default function Home() {
     setContractTierDescription(firstRule?.description ?? "");
     setContractFiles([]);
     setContractDialogOpen(true);
+  }
+
+  function updateContractStartDate(value: string) {
+    setContractStartDate(value);
+    if (!editingContractId) {
+      setContractCode(nextContractCode(contracts, value));
+    }
   }
 
   function closeContractDialog() {
@@ -1171,12 +1317,8 @@ export default function Home() {
 
   function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (
-      !customerCode.trim() ||
-      !customerName.trim() ||
-      !customerFullName.trim()
-    ) {
-      setMessage("保存客户失败：客户编码、客户简称和客户全称不能为空。");
+    if (!customerName.trim() || !customerFullName.trim()) {
+      setMessage("保存客户失败：客户简称和客户全称不能为空。");
       return;
     }
 
@@ -1186,7 +1328,6 @@ export default function Home() {
       ["customer.write"],
       async () => {
         const payload = {
-          code: customerCode,
           name: customerName,
           fullName: customerFullName,
           status: editingCustomer?.status ?? "ACTIVE",
@@ -1202,6 +1343,56 @@ export default function Home() {
         resetCustomerForm();
         return result;
       },
+    );
+  }
+
+  function saveSigningEntity(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !signingEntityShortName.trim() ||
+      !signingEntityFullName.trim() ||
+      !signingEntityLegalRepresentative.trim()
+    ) {
+      setMessage("保存签约主体失败：简称、全称和法人姓名不能为空。");
+      return;
+    }
+
+    const isEditing = Boolean(editingSigningEntityId);
+    void submitAction(
+      isEditing ? "修改签约主体" : "创建签约主体",
+      ["contract.write"],
+      async () => {
+        const result = await request(
+          isEditing
+            ? `/signing-entities/${editingSigningEntityId}`
+            : "/signing-entities",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            body: JSON.stringify({
+              shortName: signingEntityShortName,
+              fullName: signingEntityFullName,
+              legalRepresentative: signingEntityLegalRepresentative,
+              taxpayerType: signingEntityTaxpayerType,
+            }),
+          },
+        );
+        setSigningEntityDialogOpen(false);
+        resetSigningEntityForm();
+        return result;
+      },
+    );
+  }
+
+  function deleteSigningEntity(entity: SigningEntity) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除签约主体 ${entity.shortName}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除签约主体", ["contract.write"], () =>
+      request(`/signing-entities/${entity.id}`, { method: "DELETE" }),
     );
   }
 
@@ -1242,8 +1433,8 @@ export default function Home() {
       setMessage("保存合同失败：请先选择客户。");
       return;
     }
-    if (!contractCode.trim()) {
-      setMessage("保存合同失败：合同编号不能为空。");
+    if (!selectedSigningEntityId) {
+      setMessage("保存合同失败：请先选择我方签约主体。");
       return;
     }
     if (!contractStartDate) {
@@ -1280,10 +1471,6 @@ export default function Home() {
     }
 
     const isEditing = Boolean(editingContractId);
-    const contractCustomer = customers.find(
-      (customer) => customer.id === selectedCustomerId,
-    );
-
     void submitAction(
       isEditing ? "修改合同" : "创建合同",
       ["contract.write"],
@@ -1294,8 +1481,7 @@ export default function Home() {
             method: isEditing ? "PATCH" : "POST",
             body: JSON.stringify({
               customerId: selectedCustomerId,
-              code: contractCode,
-              name: `${contractCustomer?.name ?? "客户"} ${contractCode} 服务合同`,
+              signingEntityId: selectedSigningEntityId,
               startDate: contractStartDate,
               endDate: contractEndDate || null,
               baseFee: contractFee,
@@ -1872,10 +2058,36 @@ export default function Home() {
             openCreateCustomerDialog={openCreateCustomerDialog}
             openEditCustomerDialog={openEditCustomerDialog}
             selectedCustomerId={selectedCustomerId}
-            setCustomerCode={setCustomerCode}
             setCustomerFullName={setCustomerFullName}
             setCustomerName={setCustomerName}
             setSelectedCustomerId={setSelectedCustomerId}
+          />
+        ) : null}
+
+        {active === "signingEntities" ? (
+          <SigningEntitiesModule
+            closeSigningEntityDialog={closeSigningEntityDialog}
+            deleteSigningEntity={deleteSigningEntity}
+            disabledReason={actionBlockReason("contract.write")}
+            editingSigningEntity={editingSigningEntity}
+            openCreateSigningEntityDialog={openCreateSigningEntityDialog}
+            openEditSigningEntityDialog={openEditSigningEntityDialog}
+            saveSigningEntity={saveSigningEntity}
+            selectedSigningEntityId={selectedSigningEntityId}
+            setSelectedSigningEntityId={setSelectedSigningEntityId}
+            setSigningEntityFullName={setSigningEntityFullName}
+            setSigningEntityLegalRepresentative={
+              setSigningEntityLegalRepresentative
+            }
+            setSigningEntityShortName={setSigningEntityShortName}
+            setSigningEntityTaxpayerType={setSigningEntityTaxpayerType}
+            signingEntities={signingEntities}
+            signingEntityCode={signingEntityCode}
+            signingEntityDialogOpen={signingEntityDialogOpen}
+            signingEntityFullName={signingEntityFullName}
+            signingEntityLegalRepresentative={signingEntityLegalRepresentative}
+            signingEntityShortName={signingEntityShortName}
+            signingEntityTaxpayerType={signingEntityTaxpayerType}
           />
         ) : null}
 
@@ -1901,16 +2113,18 @@ export default function Home() {
             openEditContractDialog={openEditContractDialog}
             selectedCustomerId={selectedCustomerId}
             selectedContractId={selectedContractId}
-            setContractCode={setContractCode}
             setContractEndDate={setContractEndDate}
             setContractFee={setContractFee}
             setContractIncentiveUnitPrice={setContractIncentiveUnitPrice}
             setContractServiceFeeRate={setContractServiceFeeRate}
-            setContractStartDate={setContractStartDate}
+            setContractStartDate={updateContractStartDate}
             setContractTierDescription={setContractTierDescription}
             setContractTierMode={setContractTierMode}
             setSelectedCustomerId={setSelectedCustomerId}
             setSelectedContractId={setSelectedContractId}
+            selectedSigningEntityId={selectedSigningEntityId}
+            setSelectedSigningEntityId={setSelectedSigningEntityId}
+            signingEntities={signingEntities}
             updateContractFiles={updateContractFiles}
           />
         ) : null}
@@ -2067,7 +2281,7 @@ function DashboardModule({
           <span>从客户到利润</span>
         </div>
         <ol className="flow-list">
-          <li>维护客户、合同和收费项</li>
+          <li>维护客户、签约主体、合同和收费项</li>
           <li>录入增值服务、代垫费用和成本</li>
           <li>生成账单，完成内部审核、财务审核、客户确认</li>
           <li>登记发票、收款、成本、应付和付款申请</li>
@@ -2356,7 +2570,6 @@ function CustomersModule({
   openCreateCustomerDialog,
   openEditCustomerDialog,
   selectedCustomerId,
-  setCustomerCode,
   setCustomerFullName,
   setCustomerName,
   setSelectedCustomerId,
@@ -2373,7 +2586,6 @@ function CustomersModule({
   openCreateCustomerDialog: () => void;
   openEditCustomerDialog: (customer: Customer) => void;
   selectedCustomerId: string;
-  setCustomerCode: (value: string) => void;
   setCustomerFullName: (value: string) => void;
   setCustomerName: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
@@ -2462,8 +2674,8 @@ function CustomersModule({
               <label>
                 客户编码
                 <input
-                  onChange={(event) => setCustomerCode(event.target.value)}
-                  placeholder="例如 CUST-202605"
+                  placeholder="系统自动分配"
+                  readOnly
                   value={customerCode}
                 />
               </label>
@@ -2506,6 +2718,222 @@ function CustomersModule({
   );
 }
 
+function SigningEntitiesModule({
+  closeSigningEntityDialog,
+  deleteSigningEntity,
+  disabledReason,
+  editingSigningEntity,
+  openCreateSigningEntityDialog,
+  openEditSigningEntityDialog,
+  saveSigningEntity,
+  selectedSigningEntityId,
+  setSelectedSigningEntityId,
+  setSigningEntityFullName,
+  setSigningEntityLegalRepresentative,
+  setSigningEntityShortName,
+  setSigningEntityTaxpayerType,
+  signingEntities,
+  signingEntityCode,
+  signingEntityDialogOpen,
+  signingEntityFullName,
+  signingEntityLegalRepresentative,
+  signingEntityShortName,
+  signingEntityTaxpayerType,
+}: {
+  closeSigningEntityDialog: () => void;
+  deleteSigningEntity: (entity: SigningEntity) => void;
+  disabledReason: string;
+  editingSigningEntity?: SigningEntity;
+  openCreateSigningEntityDialog: () => void;
+  openEditSigningEntityDialog: (entity: SigningEntity) => void;
+  saveSigningEntity: (event: FormEvent<HTMLFormElement>) => void;
+  selectedSigningEntityId: string;
+  setSelectedSigningEntityId: (value: string) => void;
+  setSigningEntityFullName: (value: string) => void;
+  setSigningEntityLegalRepresentative: (value: string) => void;
+  setSigningEntityShortName: (value: string) => void;
+  setSigningEntityTaxpayerType: (value: TaxpayerType) => void;
+  signingEntities: SigningEntity[];
+  signingEntityCode: string;
+  signingEntityDialogOpen: boolean;
+  signingEntityFullName: string;
+  signingEntityLegalRepresentative: string;
+  signingEntityShortName: string;
+  signingEntityTaxpayerType: TaxpayerType;
+}) {
+  return (
+    <section className="workspace">
+      <TablePanel
+        action={
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            onClick={openCreateSigningEntityDialog}
+            type="button"
+          >
+            新增主体
+          </button>
+        }
+        count={`${signingEntities.length} 个`}
+        title="签约主体列表"
+      >
+        {disabledReason ? (
+          <div className="inline-notice">{disabledReason}</div>
+        ) : null}
+        <table>
+          <thead>
+            <tr>
+              <th>主体编号</th>
+              <th>签约主体简称</th>
+              <th>签约主体全称</th>
+              <th>法人姓名</th>
+              <th>纳税人信息</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {signingEntities.map((entity) => (
+              <tr
+                data-selected={selectedSigningEntityId === entity.id}
+                key={entity.id}
+                onClick={() => setSelectedSigningEntityId(entity.id)}
+              >
+                <td>{entity.code}</td>
+                <td>{entity.shortName}</td>
+                <td className="wrap-cell">{entity.fullName}</td>
+                <td>{entity.legalRepresentative}</td>
+                <td>{taxpayerTypeText[entity.taxpayerType]}</td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openEditSigningEntityDialog(entity);
+                      }}
+                      type="button"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteSigningEntity(entity);
+                      }}
+                      type="button"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TablePanel>
+
+      {signingEntityDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeSigningEntityDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>{editingSigningEntity ? "编辑主体" : "新增主体"}</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeSigningEntityDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={saveSigningEntity}>
+              <label>
+                主体编号
+                <input
+                  placeholder="系统自动分配"
+                  readOnly
+                  value={signingEntityCode}
+                />
+              </label>
+              <label>
+                签约主体简称
+                <input
+                  onChange={(event) =>
+                    setSigningEntityShortName(event.target.value)
+                  }
+                  placeholder="用于合同快速选择"
+                  value={signingEntityShortName}
+                />
+              </label>
+              <label>
+                签约主体全称
+                <input
+                  onChange={(event) =>
+                    setSigningEntityFullName(event.target.value)
+                  }
+                  placeholder="营业执照或合同签署全称"
+                  value={signingEntityFullName}
+                />
+              </label>
+              <label>
+                法人姓名
+                <input
+                  onChange={(event) =>
+                    setSigningEntityLegalRepresentative(event.target.value)
+                  }
+                  placeholder="法定代表人姓名"
+                  value={signingEntityLegalRepresentative}
+                />
+              </label>
+              <label>
+                纳税人信息
+                <select
+                  onChange={(event) =>
+                    setSigningEntityTaxpayerType(
+                      event.target.value as TaxpayerType,
+                    )
+                  }
+                  value={signingEntityTaxpayerType}
+                >
+                  {Object.entries(taxpayerTypeText).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {disabledReason ? (
+                <small className="form-note">{disabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeSigningEntityDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(disabledReason)}
+                  type="submit"
+                >
+                  {editingSigningEntity ? "保存修改" : "创建主体"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function ContractsModule({
   closeContractDialog,
   contractCode,
@@ -2527,7 +2955,6 @@ function ContractsModule({
   openEditContractDialog,
   selectedCustomerId,
   selectedContractId,
-  setContractCode,
   setContractEndDate,
   setContractFee,
   setContractIncentiveUnitPrice,
@@ -2537,6 +2964,9 @@ function ContractsModule({
   setContractTierMode,
   setSelectedCustomerId,
   setSelectedContractId,
+  selectedSigningEntityId,
+  setSelectedSigningEntityId,
+  signingEntities,
   updateContractFiles,
 }: {
   closeContractDialog: () => void;
@@ -2559,7 +2989,6 @@ function ContractsModule({
   openEditContractDialog: (contract: Contract) => void;
   selectedCustomerId: string;
   selectedContractId: string;
-  setContractCode: (value: string) => void;
   setContractEndDate: (value: string) => void;
   setContractFee: (value: string) => void;
   setContractIncentiveUnitPrice: (value: string) => void;
@@ -2569,6 +2998,9 @@ function ContractsModule({
   setContractTierMode: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
   setSelectedContractId: (value: string) => void;
+  selectedSigningEntityId: string;
+  setSelectedSigningEntityId: (value: string) => void;
+  signingEntities: SigningEntity[];
   updateContractFiles: (fileList: FileList | null) => void;
 }) {
   return (
@@ -2595,6 +3027,7 @@ function ContractsModule({
             <tr>
               <th>合同编号</th>
               <th>客户简称</th>
+              <th>我方签约主体</th>
               <th>合同周期</th>
               <th>基础费用</th>
               <th>激励单价</th>
@@ -2616,6 +3049,7 @@ function ContractsModule({
                 >
                   <td>{contract.code}</td>
                   <td>{contract.customer?.name ?? "-"}</td>
+                  <td>{contract.signingEntity?.shortName ?? "-"}</td>
                   <td className="wrap-cell">{contractPeriod(contract)}</td>
                   <td>{moneyText(contractBaseFee(contract))}</td>
                   <td>{moneyText(contract.incentiveUnitPrice)}</td>
@@ -2691,10 +3125,26 @@ function ContractsModule({
                 <label>
                   合同编号
                   <input
-                    onChange={(event) => setContractCode(event.target.value)}
-                    placeholder="例如 CTR-202605"
+                    placeholder="系统自动分配"
+                    readOnly
                     value={contractCode}
                   />
+                </label>
+                <label>
+                  我方签约主体
+                  <select
+                    onChange={(event) =>
+                      setSelectedSigningEntityId(event.target.value)
+                    }
+                    value={selectedSigningEntityId}
+                  >
+                    <option value="">选择签约主体</option>
+                    {signingEntities.map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {entity.shortName}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label>
                   周期开始

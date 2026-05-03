@@ -21,6 +21,12 @@ enum ContractStatus {
   TERMINATED
 }
 
+enum TaxpayerType {
+  SMALL_SCALE
+  GENERAL
+  OVERSEAS
+}
+
 enum ChargeItemKind {
   FIXED
   VARIABLE
@@ -105,45 +111,46 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  users     User[]
-  roles     Role[]
-  auditLogs AuditLog[]
-  customers Customer[]
-  contracts Contract[]
-  chargeRuleTemplates ChargeRuleTemplate[]
-  extraChargeCategories ExtraChargeCategory[]
-  billingPeriods BillingPeriod[]
-  bills Bill[]
-  invoices Invoice[]
-  receipts Receipt[]
-  costCategories CostCategory[]
-  costEntries CostEntry[]
-  payables Payable[]
-  paymentRequests PaymentRequest[]
-  payments Payment[]
-  periodClosings PeriodClosing[]
-  attachments Attachment[]
+  users                  User[]
+  roles                  Role[]
+  auditLogs              AuditLog[]
+  customers              Customer[]
+  signingEntities        SigningEntity[]
+  contracts              Contract[]
+  chargeRuleTemplates    ChargeRuleTemplate[]
+  extraChargeCategories  ExtraChargeCategory[]
+  billingPeriods         BillingPeriod[]
+  bills                  Bill[]
+  invoices               Invoice[]
+  receipts               Receipt[]
+  costCategories         CostCategory[]
+  costEntries            CostEntry[]
+  payables               Payable[]
+  paymentRequests        PaymentRequest[]
+  payments               Payment[]
+  periodClosings         PeriodClosing[]
+  attachments            Attachment[]
   monthlyCustomerMetrics MonthlyCustomerMetric[]
 
   @@map("organizations")
 }
 
 model User {
-  id             String    @id @default(uuid())
-  orgId          String    @map("org_id")
-  email          String    @unique
-  name           String
-  passwordHash   String?   @map("password_hash")
-  isActive       Boolean   @default(true) @map("is_active")
-  feishuUserId   String?   @map("feishu_user_id")
-  lastLoginAt    DateTime? @map("last_login_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  id           String    @id @default(uuid())
+  orgId        String    @map("org_id")
+  email        String    @unique
+  name         String
+  passwordHash String?   @map("password_hash")
+  isActive     Boolean   @default(true) @map("is_active")
+  feishuUserId String?   @map("feishu_user_id")
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  org            Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  org            Organization    @relation(fields: [orgId], references: [id], onDelete: Restrict)
   userRoles      UserRole[]
   refreshTokens  RefreshToken[]
-  auditLogs      AuditLog[]    @relation("AuditActor")
+  auditLogs      AuditLog[]      @relation("AuditActor")
   customerOwners CustomerOwner[]
 
   @@index([orgId])
@@ -177,7 +184,7 @@ model Permission {
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
 
-  roles       RolePermission[]
+  roles RolePermission[]
 
   @@map("permissions")
 }
@@ -187,8 +194,8 @@ model UserRole {
   roleId    String   @map("role_id")
   createdAt DateTime @default(now()) @map("created_at")
 
-  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role      Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
   @@index([roleId])
@@ -200,8 +207,8 @@ model RolePermission {
   permissionId String   @map("permission_id")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
   @@index([permissionId])
@@ -209,14 +216,14 @@ model RolePermission {
 }
 
 model RefreshToken {
-  id          String    @id @default(uuid())
-  userId      String    @map("user_id")
-  tokenHash   String    @map("token_hash")
-  expiresAt   DateTime  @map("expires_at")
-  revokedAt   DateTime? @map("revoked_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
 
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
@@ -237,8 +244,8 @@ model AuditLog {
   userAgent   String?  @map("user_agent")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  org         Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  actor       User?        @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  actor User?        @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([orgId, createdAt])
   @@index([entityType, entityId])
@@ -297,17 +304,17 @@ model Customer {
   createdAt DateTime       @default(now()) @map("created_at")
   updatedAt DateTime       @updatedAt @map("updated_at")
 
-  org       Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  contacts  CustomerContact[]
+  org             Organization             @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  contacts        CustomerContact[]
   billingProfiles CustomerBillingProfile[]
-  owners    CustomerOwner[]
-  contracts Contract[]
-  extraCharges ExtraCharge[]
-  bills     Bill[]
-  costEntries CostEntry[]
-  payables  Payable[]
+  owners          CustomerOwner[]
+  contracts       Contract[]
+  extraCharges    ExtraCharge[]
+  bills           Bill[]
+  costEntries     CostEntry[]
+  payables        Payable[]
   paymentRequests PaymentRequest[]
-  monthlyMetrics MonthlyCustomerMetric[]
+  monthlyMetrics  MonthlyCustomerMetric[]
 
   @@unique([orgId, code])
   @@index([orgId, status])
@@ -318,13 +325,13 @@ model Customer {
 
 model CustomerContact {
   id         String   @id @default(uuid())
-  customerId String  @map("customer_id")
+  customerId String   @map("customer_id")
   name       String
   title      String?
   phone      String?
   email      String?
   address    String?
-  isPrimary  Boolean @default(false) @map("is_primary")
+  isPrimary  Boolean  @default(false) @map("is_primary")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -367,36 +374,60 @@ model CustomerOwner {
   @@map("customer_owners")
 }
 
-model Contract {
-  id         String         @id @default(uuid())
-  orgId      String         @map("org_id")
-  customerId String         @map("customer_id")
-  code       String
-  name       String
-  status     ContractStatus @default(DRAFT)
-  startDate  DateTime       @map("start_date")
-  endDate    DateTime?      @map("end_date")
-  billingDay Int            @default(1) @map("billing_day")
-  currency   String         @default("CNY")
-  notes      String?
-  baseFee    Decimal?       @map("base_fee") @db.Decimal(18, 2)
-  incentiveUnitPrice Decimal? @map("incentive_unit_price") @db.Decimal(18, 2)
-  serviceFeeRate Decimal?   @map("service_fee_rate") @db.Decimal(8, 4)
-  tierMode   String?        @map("tier_mode")
-  tierRules  Json?          @map("tier_rules")
-  createdAt  DateTime       @default(now()) @map("created_at")
-  updatedAt  DateTime       @updatedAt @map("updated_at")
+model SigningEntity {
+  id                  String       @id @default(uuid())
+  orgId               String       @map("org_id")
+  code                String
+  shortName           String       @map("short_name")
+  fullName            String       @map("full_name")
+  legalRepresentative String       @map("legal_representative")
+  taxpayerType        TaxpayerType @map("taxpayer_type")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
 
-  org         Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  customer    Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  chargeItems ContractChargeItem[]
-  extraCharges ExtraCharge[]
-  bills       Bill[]
-  attachments Attachment[]
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  contracts Contract[]
+
+  @@unique([orgId, code])
+  @@unique([orgId, fullName])
+  @@index([orgId])
+  @@index([shortName])
+  @@map("signing_entities")
+}
+
+model Contract {
+  id                 String         @id @default(uuid())
+  orgId              String         @map("org_id")
+  customerId         String         @map("customer_id")
+  signingEntityId    String?        @map("signing_entity_id")
+  code               String
+  name               String
+  status             ContractStatus @default(DRAFT)
+  startDate          DateTime       @map("start_date")
+  endDate            DateTime?      @map("end_date")
+  billingDay         Int            @default(1) @map("billing_day")
+  currency           String         @default("CNY")
+  notes              String?
+  baseFee            Decimal?       @map("base_fee") @db.Decimal(18, 2)
+  incentiveUnitPrice Decimal?       @map("incentive_unit_price") @db.Decimal(18, 2)
+  serviceFeeRate     Decimal?       @map("service_fee_rate") @db.Decimal(8, 4)
+  tierMode           String?        @map("tier_mode")
+  tierRules          Json?          @map("tier_rules")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  org           Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  customer      Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  signingEntity SigningEntity?       @relation(fields: [signingEntityId], references: [id], onDelete: Restrict)
+  chargeItems   ContractChargeItem[]
+  extraCharges  ExtraCharge[]
+  bills         Bill[]
+  attachments   Attachment[]
 
   @@unique([orgId, code])
   @@index([orgId, status])
   @@index([customerId, status])
+  @@index([signingEntityId])
   @@map("contracts")
 }
 
@@ -415,7 +446,7 @@ model ContractChargeItem {
   createdAt   DateTime       @default(now()) @map("created_at")
   updatedAt   DateTime       @updatedAt @map("updated_at")
 
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contract  Contract   @relation(fields: [contractId], references: [id], onDelete: Cascade)
   billItems BillItem[]
 
   @@index([contractId, isActive])
@@ -450,7 +481,7 @@ model ExtraChargeCategory {
   createdAt DateTime        @default(now()) @map("created_at")
   updatedAt DateTime        @updatedAt @map("updated_at")
 
-  org          Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  org          Organization  @relation(fields: [orgId], references: [id], onDelete: Restrict)
   extraCharges ExtraCharge[]
 
   @@unique([orgId, code])
@@ -459,25 +490,25 @@ model ExtraChargeCategory {
 }
 
 model ExtraCharge {
-  id          String            @id @default(uuid())
-  orgId       String            @map("org_id")
-  customerId  String            @map("customer_id")
-  contractId  String?           @map("contract_id")
-  categoryId  String?           @map("category_id")
-  kind        ExtraChargeKind
-  name        String
-  amount      Decimal           @db.Decimal(18, 2)
-  incurredDate DateTime         @map("incurred_date")
-  periodMonth String            @map("period_month")
-  status      ExtraChargeStatus @default(DRAFT)
-  description String?
-  createdById String?           @map("created_by_id")
-  createdAt   DateTime          @default(now()) @map("created_at")
-  updatedAt   DateTime          @updatedAt @map("updated_at")
+  id           String            @id @default(uuid())
+  orgId        String            @map("org_id")
+  customerId   String            @map("customer_id")
+  contractId   String?           @map("contract_id")
+  categoryId   String?           @map("category_id")
+  kind         ExtraChargeKind
+  name         String
+  amount       Decimal           @db.Decimal(18, 2)
+  incurredDate DateTime          @map("incurred_date")
+  periodMonth  String            @map("period_month")
+  status       ExtraChargeStatus @default(DRAFT)
+  description  String?
+  createdById  String?           @map("created_by_id")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
 
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  contract Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
-  category ExtraChargeCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  customer  Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract  Contract?            @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  category  ExtraChargeCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   billItems BillItem[]
 
   @@index([orgId, periodMonth])
@@ -507,31 +538,31 @@ model BillingPeriod {
 }
 
 model Bill {
-  id              String     @id @default(uuid())
-  orgId           String     @map("org_id")
-  customerId      String     @map("customer_id")
-  contractId      String?    @map("contract_id")
-  billNo          String     @map("bill_no")
-  periodMonth     String     @map("period_month")
-  status          BillStatus @default(DRAFT)
-  currency        String     @default("CNY")
-  subtotal        Decimal    @default(0) @db.Decimal(18, 2)
-  adjustmentTotal Decimal    @default(0) @map("adjustment_total") @db.Decimal(18, 2)
-  totalAmount     Decimal    @default(0) @map("total_amount") @db.Decimal(18, 2)
-  dueDate         DateTime?  @map("due_date")
-  confirmedAt     DateTime?  @map("confirmed_at")
-  confirmedBy     String?    @map("confirmed_by")
-  confirmationNote String?   @map("confirmation_note")
-  createdAt       DateTime   @default(now()) @map("created_at")
-  updatedAt       DateTime   @updatedAt @map("updated_at")
+  id               String     @id @default(uuid())
+  orgId            String     @map("org_id")
+  customerId       String     @map("customer_id")
+  contractId       String?    @map("contract_id")
+  billNo           String     @map("bill_no")
+  periodMonth      String     @map("period_month")
+  status           BillStatus @default(DRAFT)
+  currency         String     @default("CNY")
+  subtotal         Decimal    @default(0) @db.Decimal(18, 2)
+  adjustmentTotal  Decimal    @default(0) @map("adjustment_total") @db.Decimal(18, 2)
+  totalAmount      Decimal    @default(0) @map("total_amount") @db.Decimal(18, 2)
+  dueDate          DateTime?  @map("due_date")
+  confirmedAt      DateTime?  @map("confirmed_at")
+  confirmedBy      String?    @map("confirmed_by")
+  confirmationNote String?    @map("confirmation_note")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
 
-  org      Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  contract Contract?    @relation(fields: [contractId], references: [id], onDelete: SetNull)
-  items    BillItem[]
-  confirmations BillConfirmation[]
-  adjustments BillAdjustment[]
-  statusEvents BillStatusEvent[]
+  org                Organization        @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  customer           Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contract           Contract?           @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  items              BillItem[]
+  confirmations      BillConfirmation[]
+  adjustments        BillAdjustment[]
+  statusEvents       BillStatusEvent[]
   invoiceAllocations InvoiceAllocation[]
   receiptAllocations ReceiptAllocation[]
 
@@ -544,23 +575,23 @@ model Bill {
 }
 
 model BillItem {
-  id          String           @id @default(uuid())
-  billId      String           @map("bill_id")
-  contractChargeItemId String? @map("contract_charge_item_id")
-  extraChargeId String?        @map("extra_charge_id")
-  adjustmentId String?         @map("adjustment_id")
-  sourceType  ChargeSourceType @map("source_type")
-  name        String
-  description String?
-  amount      Decimal          @db.Decimal(18, 2)
-  quantity    Decimal          @default(1) @db.Decimal(18, 4)
-  lineTotal   Decimal          @map("line_total") @db.Decimal(18, 2)
-  occurredDate DateTime?       @map("occurred_date")
-  createdAt   DateTime         @default(now()) @map("created_at")
+  id                   String           @id @default(uuid())
+  billId               String           @map("bill_id")
+  contractChargeItemId String?          @map("contract_charge_item_id")
+  extraChargeId        String?          @map("extra_charge_id")
+  adjustmentId         String?          @map("adjustment_id")
+  sourceType           ChargeSourceType @map("source_type")
+  name                 String
+  description          String?
+  amount               Decimal          @db.Decimal(18, 2)
+  quantity             Decimal          @default(1) @db.Decimal(18, 4)
+  lineTotal            Decimal          @map("line_total") @db.Decimal(18, 2)
+  occurredDate         DateTime?        @map("occurred_date")
+  createdAt            DateTime         @default(now()) @map("created_at")
 
-  bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  bill               Bill                @relation(fields: [billId], references: [id], onDelete: Cascade)
   contractChargeItem ContractChargeItem? @relation(fields: [contractChargeItemId], references: [id], onDelete: SetNull)
-  extraCharge ExtraCharge? @relation(fields: [extraChargeId], references: [id], onDelete: SetNull)
+  extraCharge        ExtraCharge?        @relation(fields: [extraChargeId], references: [id], onDelete: SetNull)
 
   @@index([billId])
   @@index([extraChargeId])
@@ -568,12 +599,12 @@ model BillItem {
 }
 
 model BillConfirmation {
-  id            String   @id @default(uuid())
-  billId        String   @map("bill_id")
-  confirmedByName String @map("confirmed_by_name")
-  confirmedAt   DateTime @default(now()) @map("confirmed_at")
-  note          String?
-  evidenceAttachmentId String? @map("evidence_attachment_id")
+  id                   String   @id @default(uuid())
+  billId               String   @map("bill_id")
+  confirmedByName      String   @map("confirmed_by_name")
+  confirmedAt          DateTime @default(now()) @map("confirmed_at")
+  note                 String?
+  evidenceAttachmentId String?  @map("evidence_attachment_id")
 
   bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
 
@@ -596,13 +627,13 @@ model BillAdjustment {
 }
 
 model BillStatusEvent {
-  id          String     @id @default(uuid())
-  billId      String     @map("bill_id")
+  id          String      @id @default(uuid())
+  billId      String      @map("bill_id")
   fromStatus  BillStatus? @map("from_status")
-  toStatus    BillStatus @map("to_status")
+  toStatus    BillStatus  @map("to_status")
   note        String?
-  actorUserId String?    @map("actor_user_id")
-  createdAt   DateTime   @default(now()) @map("created_at")
+  actorUserId String?     @map("actor_user_id")
+  createdAt   DateTime    @default(now()) @map("created_at")
 
   bill Bill @relation(fields: [billId], references: [id], onDelete: Cascade)
 
@@ -611,20 +642,20 @@ model BillStatusEvent {
 }
 
 model Invoice {
-  id          String        @id @default(uuid())
-  orgId       String        @map("org_id")
-  invoiceNo   String        @map("invoice_no")
-  invoiceType String        @map("invoice_type")
-  status      InvoiceStatus @default(ISSUED)
-  issueDate   DateTime      @map("issue_date")
-  amount      Decimal       @db.Decimal(18, 2)
-  taxAmount   Decimal       @default(0) @map("tax_amount") @db.Decimal(18, 2)
-  remarks     String?
-  fileAttachmentId String?  @map("file_attachment_id")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  id               String        @id @default(uuid())
+  orgId            String        @map("org_id")
+  invoiceNo        String        @map("invoice_no")
+  invoiceType      String        @map("invoice_type")
+  status           InvoiceStatus @default(ISSUED)
+  issueDate        DateTime      @map("issue_date")
+  amount           Decimal       @db.Decimal(18, 2)
+  taxAmount        Decimal       @default(0) @map("tax_amount") @db.Decimal(18, 2)
+  remarks          String?
+  fileAttachmentId String?       @map("file_attachment_id")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  org         Organization        @relation(fields: [orgId], references: [id], onDelete: Restrict)
   allocations InvoiceAllocation[]
 
   @@unique([orgId, invoiceNo])
@@ -634,10 +665,10 @@ model Invoice {
 }
 
 model InvoiceAllocation {
-  id        String  @id @default(uuid())
-  invoiceId String  @map("invoice_id")
-  billId    String  @map("bill_id")
-  amount    Decimal @db.Decimal(18, 2)
+  id        String   @id @default(uuid())
+  invoiceId String   @map("invoice_id")
+  billId    String   @map("bill_id")
+  amount    Decimal  @db.Decimal(18, 2)
   createdAt DateTime @default(now()) @map("created_at")
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
@@ -649,20 +680,20 @@ model InvoiceAllocation {
 }
 
 model Receipt {
-  id         String        @id @default(uuid())
-  orgId      String        @map("org_id")
-  receiptNo  String?       @map("receipt_no")
-  receivedAt DateTime      @map("received_at")
-  amount     Decimal       @db.Decimal(18, 2)
-  account    String
-  payer      String?
-  status     ReceiptStatus @default(REGISTERED)
-  remarks    String?
-  attachmentId String?     @map("attachment_id")
-  createdAt  DateTime      @default(now()) @map("created_at")
-  updatedAt  DateTime      @updatedAt @map("updated_at")
+  id           String        @id @default(uuid())
+  orgId        String        @map("org_id")
+  receiptNo    String?       @map("receipt_no")
+  receivedAt   DateTime      @map("received_at")
+  amount       Decimal       @db.Decimal(18, 2)
+  account      String
+  payer        String?
+  status       ReceiptStatus @default(REGISTERED)
+  remarks      String?
+  attachmentId String?       @map("attachment_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  org         Organization        @relation(fields: [orgId], references: [id], onDelete: Restrict)
   allocations ReceiptAllocation[]
 
   @@index([orgId, receivedAt])
@@ -671,10 +702,10 @@ model Receipt {
 }
 
 model ReceiptAllocation {
-  id        String  @id @default(uuid())
-  receiptId String  @map("receipt_id")
-  billId    String  @map("bill_id")
-  amount    Decimal @db.Decimal(18, 2)
+  id        String   @id @default(uuid())
+  receiptId String   @map("receipt_id")
+  billId    String   @map("bill_id")
+  amount    Decimal  @db.Decimal(18, 2)
   createdAt DateTime @default(now()) @map("created_at")
 
   receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
@@ -694,10 +725,10 @@ model CostCategory {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  costEntries CostEntry[]
-  payables Payable[]
-  paymentRequests PaymentRequest[]
+  org                 Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  costEntries         CostEntry[]
+  payables            Payable[]
+  paymentRequests     PaymentRequest[]
   paymentRequestItems PaymentRequestItem[]
 
   @@unique([orgId, code])
@@ -706,22 +737,22 @@ model CostCategory {
 }
 
 model CostEntry {
-  id          String   @id @default(uuid())
-  orgId       String   @map("org_id")
-  customerId  String   @map("customer_id")
-  periodMonth String   @map("period_month")
-  categoryId  String?  @map("category_id")
-  amount      Decimal  @db.Decimal(18, 2)
-  incurredDate DateTime @map("incurred_date")
-  handlerUserId String? @map("handler_user_id")
-  description String?
-  attachmentId String? @map("attachment_id")
-  payableCreated Boolean @default(false) @map("payable_created")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id             String   @id @default(uuid())
+  orgId          String   @map("org_id")
+  customerId     String   @map("customer_id")
+  periodMonth    String   @map("period_month")
+  categoryId     String?  @map("category_id")
+  amount         Decimal  @db.Decimal(18, 2)
+  incurredDate   DateTime @map("incurred_date")
+  handlerUserId  String?  @map("handler_user_id")
+  description    String?
+  attachmentId   String?  @map("attachment_id")
+  payableCreated Boolean  @default(false) @map("payable_created")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
-  org      Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  org      Organization  @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  customer Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
   category CostCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   payables Payable[]
 
@@ -747,12 +778,12 @@ model Payable {
   createdAt   DateTime      @default(now()) @map("created_at")
   updatedAt   DateTime      @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  costEntry CostEntry? @relation(fields: [costEntryId], references: [id], onDelete: SetNull)
-  category CostCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  org                 Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  customer            Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  costEntry           CostEntry?           @relation(fields: [costEntryId], references: [id], onDelete: SetNull)
+  category            CostCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   paymentRequestItems PaymentRequestItem[]
-  paymentAllocations PaymentAllocation[]
+  paymentAllocations  PaymentAllocation[]
 
   @@index([orgId, periodMonth])
   @@index([customerId, periodMonth])
@@ -761,34 +792,34 @@ model Payable {
 }
 
 model PaymentRequest {
-  id          String               @id @default(uuid())
-  orgId       String               @map("org_id")
-  requestNo   String               @map("request_no")
-  status      PaymentRequestStatus @default(DRAFT)
-  applicantUserId String?          @map("applicant_user_id")
-  supplierName String              @map("supplier_name")
-  customerId  String?              @map("customer_id")
-  periodMonth String?              @map("period_month")
-  categoryId  String?              @map("category_id")
-  payableId   String?              @map("payable_id")
-  totalAmount Decimal              @default(0) @map("total_amount") @db.Decimal(18, 2)
-  requestedAmount Decimal          @default(0) @map("requested_amount") @db.Decimal(18, 2)
-  accountInfo Json?                @map("account_info")
-  reason      String?
-  expectedPaymentDate DateTime?    @map("expected_payment_date")
-  submittedAt DateTime?            @map("submitted_at")
-  decidedAt   DateTime?            @map("decided_at")
-  decidedById String?              @map("decided_by_id")
-  rejectReason String?             @map("reject_reason")
-  createdAt   DateTime             @default(now()) @map("created_at")
-  updatedAt   DateTime             @updatedAt @map("updated_at")
+  id                  String               @id @default(uuid())
+  orgId               String               @map("org_id")
+  requestNo           String               @map("request_no")
+  status              PaymentRequestStatus @default(DRAFT)
+  applicantUserId     String?              @map("applicant_user_id")
+  supplierName        String               @map("supplier_name")
+  customerId          String?              @map("customer_id")
+  periodMonth         String?              @map("period_month")
+  categoryId          String?              @map("category_id")
+  payableId           String?              @map("payable_id")
+  totalAmount         Decimal              @default(0) @map("total_amount") @db.Decimal(18, 2)
+  requestedAmount     Decimal              @default(0) @map("requested_amount") @db.Decimal(18, 2)
+  accountInfo         Json?                @map("account_info")
+  reason              String?
+  expectedPaymentDate DateTime?            @map("expected_payment_date")
+  submittedAt         DateTime?            @map("submitted_at")
+  decidedAt           DateTime?            @map("decided_at")
+  decidedById         String?              @map("decided_by_id")
+  rejectReason        String?              @map("reject_reason")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  category CostCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  items PaymentRequestItem[]
+  org       Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  customer  Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  category  CostCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  items     PaymentRequestItem[]
   approvals PaymentApproval[]
-  payments Payment[]
+  payments  Payment[]
 
   @@unique([orgId, requestNo])
   @@index([orgId, status])
@@ -797,19 +828,19 @@ model PaymentRequest {
 }
 
 model PaymentRequestItem {
-  id          String  @id @default(uuid())
-  requestId   String  @map("request_id")
-  payableId   String? @map("payable_id")
-  customerId  String? @map("customer_id")
-  periodMonth String? @map("period_month")
-  categoryId  String? @map("category_id")
-  amount      Decimal @db.Decimal(18, 2)
+  id          String   @id @default(uuid())
+  requestId   String   @map("request_id")
+  payableId   String?  @map("payable_id")
+  customerId  String?  @map("customer_id")
+  periodMonth String?  @map("period_month")
+  categoryId  String?  @map("category_id")
+  amount      Decimal  @db.Decimal(18, 2)
   description String?
   createdAt   DateTime @default(now()) @map("created_at")
 
-  request PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  payable Payable? @relation(fields: [payableId], references: [id], onDelete: SetNull)
-  category CostCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  request  PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  payable  Payable?       @relation(fields: [payableId], references: [id], onDelete: SetNull)
+  category CostCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@index([requestId])
   @@index([payableId])
@@ -817,12 +848,12 @@ model PaymentRequestItem {
 }
 
 model PaymentApproval {
-  id          String   @id @default(uuid())
-  requestId   String   @map("request_id")
-  approverUserId String? @map("approver_user_id")
-  action      String
-  note        String?
-  createdAt   DateTime @default(now()) @map("created_at")
+  id             String   @id @default(uuid())
+  requestId      String   @map("request_id")
+  approverUserId String?  @map("approver_user_id")
+  action         String
+  note           String?
+  createdAt      DateTime @default(now()) @map("created_at")
 
   request PaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
@@ -831,22 +862,22 @@ model PaymentApproval {
 }
 
 model Payment {
-  id          String        @id @default(uuid())
-  orgId       String        @map("org_id")
-  paymentNo   String        @map("payment_no")
-  requestId   String?       @map("request_id")
-  paidAt      DateTime      @map("paid_at")
-  amount      Decimal       @db.Decimal(18, 2)
-  account     String
-  payeeName   String        @map("payee_name")
-  status      PaymentStatus @default(REGISTERED)
-  remarks     String?
-  attachmentId String?      @map("attachment_id")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  id           String        @id @default(uuid())
+  orgId        String        @map("org_id")
+  paymentNo    String        @map("payment_no")
+  requestId    String?       @map("request_id")
+  paidAt       DateTime      @map("paid_at")
+  amount       Decimal       @db.Decimal(18, 2)
+  account      String
+  payeeName    String        @map("payee_name")
+  status       PaymentStatus @default(REGISTERED)
+  remarks      String?
+  attachmentId String?       @map("attachment_id")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  request PaymentRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  org         Organization        @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  request     PaymentRequest?     @relation(fields: [requestId], references: [id], onDelete: SetNull)
   allocations PaymentAllocation[]
 
   @@unique([orgId, paymentNo])
@@ -856,13 +887,13 @@ model Payment {
 }
 
 model PaymentAllocation {
-  id        String  @id @default(uuid())
-  paymentId String  @map("payment_id")
-  payableId String? @map("payable_id")
-  amount    Decimal @db.Decimal(18, 2)
+  id        String   @id @default(uuid())
+  paymentId String   @map("payment_id")
+  payableId String?  @map("payable_id")
+  amount    Decimal  @db.Decimal(18, 2)
   createdAt DateTime @default(now()) @map("created_at")
 
-  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  payment Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   payable Payable? @relation(fields: [payableId], references: [id], onDelete: SetNull)
 
   @@index([paymentId])
@@ -887,21 +918,21 @@ model PeriodClosing {
 }
 
 model Attachment {
-  id          String   @id @default(uuid())
-  orgId       String   @map("org_id")
-  ownerType   String?  @map("owner_type")
-  ownerId     String?  @map("owner_id")
-  fileName    String   @map("file_name")
-  contentType String?  @map("content_type")
-  sizeBytes   BigInt?  @map("size_bytes")
-  storageKey  String   @map("storage_key")
-  url         String?
-  uploadedById String? @map("uploaded_by_id")
-  contractId  String?  @map("contract_id")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id           String   @id @default(uuid())
+  orgId        String   @map("org_id")
+  ownerType    String?  @map("owner_type")
+  ownerId      String?  @map("owner_id")
+  fileName     String   @map("file_name")
+  contentType  String?  @map("content_type")
+  sizeBytes    BigInt?  @map("size_bytes")
+  storageKey   String   @map("storage_key")
+  url          String?
+  uploadedById String?  @map("uploaded_by_id")
+  contractId   String?  @map("contract_id")
+  createdAt    DateTime @default(now()) @map("created_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  contract Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  contract Contract?    @relation(fields: [contractId], references: [id], onDelete: SetNull)
 
   @@index([orgId, ownerType, ownerId])
   @@index([contractId])
@@ -909,18 +940,18 @@ model Attachment {
 }
 
 model MonthlyCustomerMetric {
-  id          String   @id @default(uuid())
-  orgId       String   @map("org_id")
-  customerId  String   @map("customer_id")
-  periodMonth String   @map("period_month")
-  incomeAmount Decimal @default(0) @map("income_amount") @db.Decimal(18, 2)
-  costAmount   Decimal @default(0) @map("cost_amount") @db.Decimal(18, 2)
-  profitAmount Decimal @default(0) @map("profit_amount") @db.Decimal(18, 2)
+  id           String   @id @default(uuid())
+  orgId        String   @map("org_id")
+  customerId   String   @map("customer_id")
+  periodMonth  String   @map("period_month")
+  incomeAmount Decimal  @default(0) @map("income_amount") @db.Decimal(18, 2)
+  costAmount   Decimal  @default(0) @map("cost_amount") @db.Decimal(18, 2)
+  profitAmount Decimal  @default(0) @map("profit_amount") @db.Decimal(18, 2)
   grossMargin  Decimal? @map("gross_margin") @db.Decimal(9, 4)
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  org Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
-  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@unique([orgId, customerId, periodMonth])
   @@index([orgId, periodMonth])

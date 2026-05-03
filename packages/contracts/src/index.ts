@@ -49,6 +49,14 @@ export const CONTRACT_STATUSES = {
 export type ContractStatus =
   (typeof CONTRACT_STATUSES)[keyof typeof CONTRACT_STATUSES];
 
+export const TAXPAYER_TYPES = {
+  SMALL_SCALE: "SMALL_SCALE",
+  GENERAL: "GENERAL",
+  OVERSEAS: "OVERSEAS",
+} as const;
+
+export type TaxpayerType = (typeof TAXPAYER_TYPES)[keyof typeof TAXPAYER_TYPES];
+
 export const BILL_STATUSES = {
   DRAFT: "DRAFT",
   INTERNAL_REVIEW: "INTERNAL_REVIEW",

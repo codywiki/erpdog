@@ -206,8 +206,6 @@ async function main() {
     client.token = login.accessToken;
 
     const runId = Date.now().toString(36);
-    const customerCode = `E2E-CUST-${runId}`;
-    const contractCode = `E2E-CON-${runId}`;
     const periodMonth = "2026-02";
 
     await request(client, "/customers/import-template");
@@ -220,8 +218,8 @@ async function main() {
         contentBase64: await workbookBase64(
           "客户导入",
           [
-            "客户编码",
-            "客户名称",
+            "客户简称",
+            "客户全称",
             "状态",
             "负责人邮箱",
             "联系人姓名",
@@ -229,12 +227,12 @@ async function main() {
           ],
           [
             {
-              客户编码: customerCode,
-              客户名称: "E2E 客户",
+              客户简称: `E2E 客户 ${runId}`,
+              客户全称: `E2E 客户有限公司 ${runId}`,
               状态: "ACTIVE",
               负责人邮箱: identity.email,
               联系人姓名: "E2E 联系人",
-              开票抬头: "E2E 客户",
+              开票抬头: `E2E 客户有限公司 ${runId}`,
             },
           ],
         ),
@@ -243,6 +241,33 @@ async function main() {
     assert(customerImport.succeeded === 1, "Customer Excel import failed.");
     const customerId = customerImport.results[0]?.id;
     assert(customerId, "Imported customer id missing.");
+    const importedCustomer = await request<{ code: string }>(
+      client,
+      `/customers/${customerId}`,
+    );
+    const customerCode = importedCustomer.code;
+    assert(
+      /^KH\d{3}$/.test(customerCode),
+      "Customer code was not auto-numbered.",
+    );
+
+    const signingEntity = await request<{ id: string; code: string }>(
+      client,
+      "/signing-entities",
+      {
+        method: "POST",
+        body: {
+          shortName: `E2E 主体 ${runId}`,
+          fullName: `E2E 签约主体有限公司 ${runId}`,
+          legalRepresentative: "E2E 法人",
+          taxpayerType: "GENERAL",
+        },
+      },
+    );
+    assert(
+      /^ZT\d{3}$/.test(signingEntity.code),
+      "Signing entity code was not auto-numbered.",
+    );
 
     await request(client, "/contracts/import-template");
     const contractImport = await request<{
@@ -254,9 +279,9 @@ async function main() {
         contentBase64: await workbookBase64(
           "合同导入",
           [
-            "合同编码",
             "合同名称",
             "客户编码",
+            "签约主体编号",
             "状态",
             "开始日期",
             "账期日",
@@ -268,9 +293,9 @@ async function main() {
           ],
           [
             {
-              合同编码: contractCode,
               合同名称: "E2E 服务合同",
               客户编码: customerCode,
+              签约主体编号: signingEntity.code,
               状态: "ACTIVE",
               开始日期: "2026-01-01",
               账期日: 1,
@@ -287,6 +312,18 @@ async function main() {
     assert(contractImport.succeeded === 1, "Contract Excel import failed.");
     const contractId = contractImport.results[0]?.id;
     assert(contractId, "Imported contract id missing.");
+    const importedContract = await request<{
+      code: string;
+      signingEntityId?: string | null;
+    }>(client, `/contracts/${contractId}`);
+    assert(
+      /^HT26\d{3}$/.test(importedContract.code),
+      "Contract code was not auto-numbered.",
+    );
+    assert(
+      importedContract.signingEntityId === signingEntity.id,
+      "Imported contract did not link the signing entity.",
+    );
 
     const businessPeriodMonth = "2026-03";
     const businessBill = await request<{

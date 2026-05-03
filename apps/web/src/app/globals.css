@@ -77,6 +77,11 @@ select {
   width: 100%;
 }
 
+input[readonly] {
+  background: #f3f7f5;
+  color: var(--muted);
+}
+
 label {
   color: var(--muted);
   display: grid;
@@ -300,6 +305,11 @@ label {
   align-items: center;
   display: flex;
   gap: 10px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .metric-grid {

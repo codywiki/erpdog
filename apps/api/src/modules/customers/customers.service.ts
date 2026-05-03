@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -31,7 +32,6 @@ type CustomerFilters = {
 } & PaginationQuery;
 
 const CUSTOMER_IMPORT_HEADERS = [
-  "客户编码",
   "客户简称",
   "客户全称",
   "状态",
@@ -50,6 +50,8 @@ const CUSTOMER_IMPORT_HEADERS = [
   "开票电话",
   "备注",
 ];
+
+const customerCodePrefix = "KH";
 
 @Injectable()
 export class CustomersService {
@@ -110,14 +112,18 @@ export class CustomersService {
     const billingProfiles = arrayField<Payload>(body, "billingProfiles");
 
     const customer = await this.prisma.$transaction(async (tx) => {
+      await this.lockCustomerRegistry(tx, user.orgId);
       await this.ensureUsersInOrg(tx, user.orgId, ownerUserIds);
+      const name = stringField(body, "name");
+      const fullName = stringField(body, "fullName");
+      await this.ensureCustomerUnique(tx, user.orgId, name, fullName);
+      const code = await this.nextCustomerCode(tx, user.orgId);
       const created = await tx.customer.create({
         data: {
           orgId: user.orgId,
-          code: stringField(body, "code"),
-          name: stringField(body, "name"),
-          fullName:
-            optionalString(body, "fullName") ?? stringField(body, "name"),
+          code,
+          name,
+          fullName,
           status: this.status(body),
           industry: optionalString(body, "industry"),
           source: optionalString(body, "source"),
@@ -165,20 +171,27 @@ export class CustomersService {
   async update(user: AuthenticatedUser, id: string, rawBody: unknown) {
     const body = bodyObject(rawBody);
     const before = await this.ensureCustomerAccess(user, id);
+    const name = optionalString(body, "name") ?? before.name;
+    const fullName =
+      optionalString(body, "fullName") ?? before.fullName ?? before.name;
 
-    const updated = await this.prisma.customer.update({
-      where: { id },
-      data: {
-        code: optionalString(body, "code") ?? before.code,
-        name: optionalString(body, "name") ?? before.name,
-        fullName:
-          optionalString(body, "fullName") ?? before.fullName ?? before.name,
-        status: this.status(body, before.status),
-        industry: optionalString(body, "industry") ?? before.industry,
-        source: optionalString(body, "source") ?? before.source,
-        notes: optionalString(body, "notes") ?? before.notes,
-      },
-      include: this.customerInclude(),
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lockCustomerRegistry(tx, user.orgId);
+      await this.ensureCustomerUnique(tx, user.orgId, name, fullName, id);
+
+      return tx.customer.update({
+        where: { id },
+        data: {
+          code: before.code,
+          name,
+          fullName,
+          status: this.status(body, before.status),
+          industry: optionalString(body, "industry") ?? before.industry,
+          source: optionalString(body, "source") ?? before.source,
+          notes: optionalString(body, "notes") ?? before.notes,
+        },
+        include: this.customerInclude(),
+      });
     });
 
     await this.audit.log({
@@ -363,7 +376,7 @@ export class CustomersService {
         name: "字段说明",
         headers: ["字段", "说明"],
         rows: [
-          { 字段: "客户编码", 说明: "必填，同一组织内唯一。" },
+          { 字段: "客户编码", 说明: "系统自动生成，导入时无需填写。" },
           { 字段: "客户简称", 说明: "必填，用于列表和业务页面快速识别。" },
           { 字段: "客户全称", 说明: "必填，客户工商或合同正式名称。" },
           {
@@ -561,7 +574,6 @@ export class CustomersService {
     const billingTitle = this.cell(row, ["开票抬头", "billingTitle"]);
 
     return {
-      code: this.cell(row, ["客户编码", "code", "Code"]),
       name: this.cell(row, ["客户简称", "客户名称", "name", "Name"]),
       fullName: this.cell(row, [
         "客户全称",
@@ -680,5 +692,52 @@ export class CustomersService {
       }
       return String(value).trim() === "";
     });
+  }
+
+  private async ensureCustomerUnique(
+    tx: PrismaService | Prisma.TransactionClient,
+    orgId: string,
+    name: string,
+    fullName: string,
+    excludeId?: string,
+  ) {
+    const duplicate = await tx.customer.findFirst({
+      where: {
+        orgId,
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+        OR: [{ name }, { fullName }, { name: fullName }, { fullName: name }],
+      },
+      select: { code: true, name: true, fullName: true },
+    });
+
+    if (duplicate) {
+      throw new ConflictException(
+        `Customer already exists: ${duplicate.fullName ?? duplicate.name}.`,
+      );
+    }
+  }
+
+  private async lockCustomerRegistry(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+  ) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`customer-registry:${orgId}`}))`;
+  }
+
+  private async nextCustomerCode(tx: Prisma.TransactionClient, orgId: string) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`customer-code:${orgId}:${customerCodePrefix}`}))`;
+    const existing = await tx.customer.findMany({
+      where: { orgId, code: { startsWith: customerCodePrefix } },
+      select: { code: true },
+    });
+    const nextNumber =
+      existing.reduce((max, item) => {
+        const match = new RegExp(`^${customerCodePrefix}(\\d+)$`).exec(
+          item.code,
+        );
+        return match?.[1] ? Math.max(max, Number(match[1])) : max;
+      }, 0) + 1;
+
+    return `${customerCodePrefix}${nextNumber.toString().padStart(3, "0")}`;
   }
 }

@@ -16,6 +16,7 @@ import { CustomersModule } from "./modules/customers/customers.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { HealthModule } from "./modules/health/health.module";
 import { IdentityModule } from "./modules/identity/identity.module";
+import { SigningEntitiesModule } from "./modules/signing-entities/signing-entities.module";
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { IdentityModule } from "./modules/identity/identity.module";
     AuthModule,
     IdentityModule,
     CustomersModule,
+    SigningEntitiesModule,
     ContractsModule,
     BillingModule,
     FinanceModule,
