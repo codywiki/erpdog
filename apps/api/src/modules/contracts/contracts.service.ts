@@ -680,13 +680,13 @@ export class ContractsService {
     }
 
     const value = optionalString(body, "tierMode");
-    if (!value) {
+    if (!value || value === "NONE") {
       return null;
     }
 
     if (!["ACCUMULATE", "FULL_COVERAGE"].includes(value)) {
       throw new BadRequestException(
-        "tierMode must be ACCUMULATE or FULL_COVERAGE.",
+        "tierMode must be ACCUMULATE, FULL_COVERAGE, or NONE.",
       );
     }
 
@@ -707,6 +707,14 @@ export class ContractsService {
       throw new BadRequestException("tierRules must be an array.");
     }
 
+    const requiresDescription =
+      tierMode === "ACCUMULATE" || tierMode === "FULL_COVERAGE";
+    if (requiresDescription && value.length === 0) {
+      throw new BadRequestException(
+        "ruleDescription is required when tierMode is ACCUMULATE or FULL_COVERAGE.",
+      );
+    }
+
     if (value.length > 0 && !tierMode) {
       throw new BadRequestException(
         "tierMode is required when tierRules are configured.",
@@ -719,6 +727,16 @@ export class ContractsService {
       }
 
       const payload = rule as Payload;
+      const description = optionalString(payload, "description");
+      if (description) {
+        return { description };
+      }
+      if (requiresDescription) {
+        throw new BadRequestException(
+          `tierRules[${index}].description is required.`,
+        );
+      }
+
       const threshold = nonNegativeMoney(
         payload.threshold,
         `tierRules[${index}].threshold`,

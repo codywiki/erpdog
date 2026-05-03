@@ -32,8 +32,9 @@ type ContractAttachment = {
 };
 
 type ContractTierRule = {
-  threshold: string;
-  serviceFeeRate: string;
+  description?: string;
+  threshold?: string;
+  serviceFeeRate?: string;
 };
 
 type Contract = {
@@ -60,9 +61,27 @@ type Bill = {
   periodMonth: string;
   status: string;
   totalAmount: string;
+  subtotal?: string;
+  uninvoicedAmount?: string;
+  unreceivedAmount?: string;
   invoiceAmount?: string;
   receiptAmount?: string;
   customer?: Customer;
+  contract?: Pick<Contract, "id" | "code" | "name">;
+  items?: Array<{
+    id?: string;
+    name: string;
+    description?: string | null;
+    amount: string;
+    quantity: string;
+    lineTotal: string;
+  }>;
+  confirmations?: Array<{
+    id: string;
+    confirmedAt: string;
+    confirmedByName: string;
+    evidenceAttachmentId?: string | null;
+  }>;
 };
 
 type Invoice = {
@@ -330,12 +349,12 @@ function contractStatus(contract: Contract) {
 
 function tierModeText(mode?: string | null) {
   if (mode === "ACCUMULATE") {
-    return "增加累加";
+    return "增量累加";
   }
   if (mode === "FULL_COVERAGE") {
     return "全量覆盖";
   }
-  return "-";
+  return "无";
 }
 
 function moneyText(value?: string | null) {
@@ -356,15 +375,23 @@ function contractBaseFee(contract: Contract) {
 }
 
 function contractTierSummary(contract: Contract) {
+  if (!contract.tierMode || contract.tierMode === "NONE") {
+    return "无";
+  }
+
   const rules = contract.tierRules ?? [];
   if (rules.length === 0) {
-    return "-";
+    return tierModeText(contract.tierMode);
   }
 
   const firstRule = rules[0];
   if (!firstRule) {
-    return "-";
+    return tierModeText(contract.tierMode);
   }
+  if (firstRule.description) {
+    return `${tierModeText(contract.tierMode)}：${firstRule.description}`;
+  }
+
   const suffix = rules.length > 1 ? ` 等 ${rules.length} 条` : "";
   return `${tierModeText(contract.tierMode)}：达 ${firstRule.threshold} 调整为 ${firstRule.serviceFeeRate}%${suffix}`;
 }
@@ -376,6 +403,30 @@ function isContractFileValid(file: File) {
     file.name.toLowerCase().endsWith(".pdf") &&
     (!file.type || file.type === "application/pdf")
   );
+}
+
+function isBusinessAttachmentValid(file: File) {
+  const type = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  return (
+    file.size > 0 &&
+    file.size <= contractAttachmentMaxBytes &&
+    (type === "application/pdf" ||
+      type === "image/png" ||
+      type === "image/jpeg" ||
+      name.endsWith(".pdf") ||
+      name.endsWith(".png") ||
+      name.endsWith(".jpg") ||
+      name.endsWith(".jpeg"))
+  );
+}
+
+function amountInput(value: number) {
+  return Math.max(0, value).toFixed(2);
+}
+
+function quantityInput(value: number) {
+  return Math.max(0, value).toFixed(4);
 }
 
 async function responseMessage(response: Response) {
@@ -423,7 +474,9 @@ function createDemoData(periodMonth: string): ConsoleData {
     incentiveUnitPrice: "4.00",
     serviceFeeRate: "8.0000",
     tierMode: "ACCUMULATE",
-    tierRules: [{ threshold: "150000.00", serviceFeeRate: "10.0000" }],
+    tierRules: [
+      { description: "超出基础服务范围的增量部分按合同约定累加计费" },
+    ],
     attachments: [],
     customer: customerA,
   };
@@ -439,7 +492,7 @@ function createDemoData(periodMonth: string): ConsoleData {
     incentiveUnitPrice: "3.50",
     serviceFeeRate: "6.5000",
     tierMode: "FULL_COVERAGE",
-    tierRules: [{ threshold: "100000.00", serviceFeeRate: "8.0000" }],
+    tierRules: [{ description: "达到约定业务量后整月服务费按覆盖规则重算" }],
     attachments: [],
     customer: customerB,
   };
@@ -449,9 +502,33 @@ function createDemoData(periodMonth: string): ConsoleData {
     periodMonth,
     status: "CUSTOMER_CONFIRMED",
     totalAmount: "18200.00",
+    subtotal: "18200.00",
     invoiceAmount: "0.00",
     receiptAmount: "10000.00",
     customer: customerA,
+    contract: { id: contractA.id, code: contractA.code, name: contractA.name },
+    items: [
+      {
+        name: "基础服务费",
+        amount: "10000.00",
+        quantity: "1.0000",
+        lineTotal: "10000.00",
+      },
+      {
+        name: "月度运营执行",
+        description: "本月服务数量 1900",
+        amount: "4.00",
+        quantity: "1900.0000",
+        lineTotal: "7600.00",
+      },
+      {
+        name: "服务费",
+        description: "按合同服务费比例 8%",
+        amount: "600.00",
+        quantity: "1.0000",
+        lineTotal: "600.00",
+      },
+    ],
   };
   const billB: Bill = {
     id: "demo-bill-yunhe",
@@ -459,9 +536,11 @@ function createDemoData(periodMonth: string): ConsoleData {
     periodMonth,
     status: "CLOSED",
     totalAmount: "12600.00",
+    subtotal: "12600.00",
     invoiceAmount: "12600.00",
     receiptAmount: "12600.00",
     customer: customerB,
+    contract: { id: contractB.id, code: contractB.code, name: contractB.name },
   };
 
   return {
@@ -636,19 +715,31 @@ export default function Home() {
   const [contractIncentiveUnitPrice, setContractIncentiveUnitPrice] =
     useState("0.00");
   const [contractServiceFeeRate, setContractServiceFeeRate] = useState("0");
-  const [contractTierMode, setContractTierMode] = useState("ACCUMULATE");
-  const [contractTierThreshold, setContractTierThreshold] = useState("");
-  const [contractTierRate, setContractTierRate] = useState("");
+  const [contractTierMode, setContractTierMode] = useState("NONE");
+  const [contractTierDescription, setContractTierDescription] = useState("");
   const [contractFiles, setContractFiles] = useState<File[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
   const [selectedBillId, setSelectedBillId] = useState("");
+  const [billContentName, setBillContentName] = useState("本月合作服务");
+  const [billQuantity, setBillQuantity] = useState("1");
+  const [billSettlementFile, setBillSettlementFile] = useState<File | null>(
+    null,
+  );
+  const [billInvoiceFile, setBillInvoiceFile] = useState<File | null>(null);
+  const [billPaymentProofFile, setBillPaymentProofFile] = useState<File | null>(
+    null,
+  );
+  const [receiptAccount, setReceiptAccount] = useState("默认收款账户");
   const [newUserEmail, setNewUserEmail] = useState(defaultManagerEmail);
   const [newUserName, setNewUserName] = useState("客户负责人");
   const [newUserPassword, setNewUserPassword] = useState("ChangeMe123!");
   const [newUserRoleCode, setNewUserRoleCode] = useState("customer_manager");
 
   const selectedBill = bills.find((bill) => bill.id === selectedBillId);
+  const selectedContract = contracts.find(
+    (contract) => contract.id === selectedContractId,
+  );
   const editingCustomer = customers.find(
     (customer) => customer.id === editingCustomerId,
   );
@@ -1082,9 +1173,8 @@ export default function Home() {
     setContractEndDate("");
     setContractIncentiveUnitPrice("0.00");
     setContractServiceFeeRate("0");
-    setContractTierMode("ACCUMULATE");
-    setContractTierThreshold("");
-    setContractTierRate("");
+    setContractTierMode("NONE");
+    setContractTierDescription("");
     setContractFiles([]);
     setEditingContractId(null);
     setSelectedCustomerId(nextCustomerId || customers[0]?.id || "");
@@ -1124,9 +1214,8 @@ export default function Home() {
     );
     setContractIncentiveUnitPrice(contract.incentiveUnitPrice ?? "0.00");
     setContractServiceFeeRate(contract.serviceFeeRate ?? "0");
-    setContractTierMode(contract.tierMode ?? "ACCUMULATE");
-    setContractTierThreshold(firstRule?.threshold ?? "");
-    setContractTierRate(firstRule?.serviceFeeRate ?? "");
+    setContractTierMode(contract.tierMode ?? "NONE");
+    setContractTierDescription(firstRule?.description ?? "");
     setContractFiles([]);
     setContractDialogOpen(true);
   }
@@ -1151,34 +1240,64 @@ export default function Home() {
     setContractFiles(nextFiles);
   }
 
+  async function uploadAttachment(
+    ownerType: string,
+    ownerId: string,
+    file: File,
+  ) {
+    const presigned = await request<{
+      attachment: { id: string };
+      upload: {
+        url: string;
+        method: "PUT";
+        headers: Record<string, string>;
+      };
+    }>("/attachments/presign-upload", {
+      method: "POST",
+      body: JSON.stringify({
+        ownerType,
+        ownerId,
+        fileName: file.name,
+        contentType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+      }),
+    });
+
+    const uploadResponse = await fetch(presigned.upload.url, {
+      method: presigned.upload.method,
+      headers: presigned.upload.headers,
+      body: file,
+    });
+    if (!uploadResponse.ok) {
+      throw new Error(`${file.name} 上传失败。`);
+    }
+
+    return presigned.attachment.id;
+  }
+
   async function uploadContractFiles(contractId: string, files: File[]) {
     for (const file of files) {
-      const presigned = await request<{
-        upload: {
-          url: string;
-          method: "PUT";
-          headers: Record<string, string>;
-        };
-      }>("/attachments/presign-upload", {
-        method: "POST",
-        body: JSON.stringify({
-          ownerType: "contract",
-          ownerId: contractId,
-          fileName: file.name,
-          contentType: file.type || "application/pdf",
-          sizeBytes: file.size,
-        }),
-      });
-
-      const uploadResponse = await fetch(presigned.upload.url, {
-        method: presigned.upload.method,
-        headers: presigned.upload.headers,
-        body: file,
-      });
-      if (!uploadResponse.ok) {
-        throw new Error(`合同附件 ${file.name} 上传失败。`);
-      }
+      await uploadAttachment("contract", contractId, file);
     }
+  }
+
+  function updateBusinessFile(
+    fileList: FileList | null,
+    setter: (file: File | null) => void,
+    label: string,
+  ) {
+    const file = fileList?.[0] ?? null;
+    if (!file) {
+      setter(null);
+      return;
+    }
+    if (!isBusinessAttachmentValid(file)) {
+      setter(null);
+      setMessage(`${label}不符合要求：仅支持 PDF、PNG、JPG，且小于 20MB。`);
+      return;
+    }
+
+    setter(file);
   }
 
   function createCustomer(event: FormEvent<HTMLFormElement>) {
@@ -1280,25 +1399,9 @@ export default function Home() {
       return;
     }
 
-    const hasTierRule =
-      Boolean(contractTierThreshold.trim()) || Boolean(contractTierRate.trim());
-    if (
-      hasTierRule &&
-      (!contractTierThreshold.trim() ||
-        !contractTierRate.trim() ||
-        !contractTierMode)
-    ) {
-      setMessage("保存合同失败：配置阶梯规则时必须填写条件、比例和规则模式。");
-      return;
-    }
-    if (
-      hasTierRule &&
-      (!Number.isFinite(Number(contractTierThreshold)) ||
-        Number(contractTierThreshold) < 0 ||
-        !Number.isFinite(Number(contractTierRate)) ||
-        Number(contractTierRate) < 0)
-    ) {
-      setMessage("保存合同失败：阶梯条件和阶梯服务费比例必须是非负数字。");
+    const hasTierRule = contractTierMode !== "NONE";
+    if (hasTierRule && !contractTierDescription.trim()) {
+      setMessage("保存合同失败：选择阶梯规则后必须填写规则描述。");
       return;
     }
 
@@ -1324,12 +1427,11 @@ export default function Home() {
               baseFee: contractFee,
               incentiveUnitPrice: contractIncentiveUnitPrice,
               serviceFeeRate: contractServiceFeeRate,
-              tierMode: hasTierRule ? contractTierMode : null,
+              tierMode: hasTierRule ? contractTierMode : "NONE",
               tierRules: hasTierRule
                 ? [
                     {
-                      threshold: contractTierThreshold,
-                      serviceFeeRate: contractTierRate,
+                      description: contractTierDescription,
                     },
                   ]
                 : [],
@@ -1346,18 +1448,82 @@ export default function Home() {
     );
   }
 
-  function runBilling() {
-    if (!contracts.some((contract) => contract.status === "ACTIVE")) {
-      setMessage("生成月度账单失败：当前没有可计费的 ACTIVE 合同。");
+  function createBusinessBill(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const contract = selectedContract;
+    if (!selectedCustomerId) {
+      setMessage("生成账单失败：请先选择客户。");
+      return;
+    }
+    const contractCustomerId = contract?.customerId ?? contract?.customer?.id;
+    if (!contract || contractCustomerId !== selectedCustomerId) {
+      setMessage("生成账单失败：请选择该客户对应的合同。");
+      return;
+    }
+    if (!billContentName.trim()) {
+      setMessage("生成账单失败：合作内容不能为空。");
+      return;
+    }
+    const quantity = Number(billQuantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setMessage("生成账单失败：数量必须大于 0。");
       return;
     }
 
-    void submitAction("生成月度账单", ["bill.manage"], () =>
-      request("/billing-runs", {
+    const baseFee = Number(contractBaseFee(contract));
+    const unitPrice = Number(contract.incentiveUnitPrice ?? 0);
+    const serviceFeeRate = Number(contract.serviceFeeRate ?? 0);
+    const serviceAmount = quantity * unitPrice;
+    const serviceFeeAmount = serviceAmount * (serviceFeeRate / 100);
+    const items: Array<{
+      name: string;
+      amount: string;
+      quantity: string;
+      description?: string;
+    }> = [];
+
+    if (baseFee > 0) {
+      items.push({
+        name: "基础费用",
+        amount: amountInput(baseFee),
+        quantity: "1.0000",
+        description: `来源合同 ${contract.code}`,
+      });
+    }
+    if (serviceAmount > 0) {
+      items.push({
+        name: billContentName.trim(),
+        amount: amountInput(unitPrice),
+        quantity: quantityInput(quantity),
+        description: `数量 ${quantityInput(quantity)}，按合同激励单价计算`,
+      });
+    }
+    if (serviceFeeAmount > 0) {
+      items.push({
+        name: "服务费",
+        amount: amountInput(serviceFeeAmount),
+        quantity: "1.0000",
+        description: `${tierModeText(contract.tierMode)}，服务费比例 ${contract.serviceFeeRate}%`,
+      });
+    }
+    if (items.length === 0) {
+      setMessage("生成账单失败：合同规则计算后账单金额为 0。");
+      return;
+    }
+
+    void submitAction("生成客户月账单", ["bill.manage"], async () => {
+      const result = await request<Bill>("/bills", {
         method: "POST",
-        body: JSON.stringify({ periodMonth }),
-      }),
-    );
+        body: JSON.stringify({
+          customerId: selectedCustomerId,
+          contractId: contract.id,
+          periodMonth,
+          items,
+        }),
+      });
+      setSelectedBillId(result.id);
+      return result;
+    });
   }
 
   function transitionBill(path: string, label: string, body: object = {}) {
@@ -1374,10 +1540,133 @@ export default function Home() {
     );
   }
 
+  function sendBillToCustomer() {
+    transitionBill("send-to-customer", "发送客户确认");
+  }
+
+  function confirmBillSettlement() {
+    if (!selectedBill) {
+      setMessage("客户确认失败：请先选择一张账单。");
+      return;
+    }
+    if (!billSettlementFile) {
+      setMessage("客户确认失败：请上传盖章结算单。");
+      return;
+    }
+
+    void submitAction("客户确认账单", ["bill.manage"], async () => {
+      const attachmentId = await uploadAttachment(
+        "bill",
+        selectedBill.id,
+        billSettlementFile,
+      );
+      const result = await request(
+        `/bills/${selectedBill.id}/confirm-customer`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            confirmedByName: selectedBill.customer?.name ?? "客户联系人",
+            note: "客户已确认盖章结算单",
+            evidenceAttachmentId: attachmentId,
+          }),
+        },
+      );
+      setBillSettlementFile(null);
+      return result;
+    });
+  }
+
+  function createSelectedBillInvoice() {
+    if (!selectedBill) {
+      setMessage("登记发票失败：请先选择一张账单。");
+      return;
+    }
+    const invoiceAmount =
+      selectedBill.uninvoicedAmount ?? selectedBill.totalAmount;
+    if (Number(invoiceAmount) <= 0) {
+      setMessage("登记发票失败：该账单已足额开票。");
+      return;
+    }
+
+    void submitAction("关联发票", ["invoice.manage"], async () => {
+      const fileAttachmentId = billInvoiceFile
+        ? await uploadAttachment("bill", selectedBill.id, billInvoiceFile)
+        : undefined;
+      const result = await request("/invoices", {
+        method: "POST",
+        body: JSON.stringify({
+          invoiceNo: `INV-${Date.now().toString(36).toUpperCase()}`,
+          invoiceType: "增值税普通发票",
+          issueDate: new Date().toISOString(),
+          amount: invoiceAmount,
+          fileAttachmentId,
+          allocations: [
+            {
+              billId: selectedBill.id,
+              amount: invoiceAmount,
+            },
+          ],
+        }),
+      });
+      setBillInvoiceFile(null);
+      return result;
+    });
+  }
+
+  function confirmSelectedBillReceipt() {
+    if (!selectedBill) {
+      setMessage("确认到账失败：请先选择一张账单。");
+      return;
+    }
+    if (!billPaymentProofFile) {
+      setMessage("确认到账失败：请上传银行打款回单。");
+      return;
+    }
+    const receiptAmount =
+      selectedBill.unreceivedAmount ?? selectedBill.totalAmount;
+    if (Number(receiptAmount) <= 0) {
+      setMessage("确认到账失败：该账单已足额回款。");
+      return;
+    }
+
+    void submitAction("确认回款到账", ["receipt.manage"], async () => {
+      const attachmentId = await uploadAttachment(
+        "bill",
+        selectedBill.id,
+        billPaymentProofFile,
+      );
+      const result = await request("/receipts", {
+        method: "POST",
+        body: JSON.stringify({
+          receiptNo: `RCPT-${Date.now().toString(36).toUpperCase()}`,
+          receivedAt: new Date().toISOString(),
+          amount: receiptAmount,
+          account: receiptAccount,
+          payer: selectedBill.customer?.fullName ?? selectedBill.customer?.name,
+          attachmentId,
+          allocations: [
+            {
+              billId: selectedBill.id,
+              amount: receiptAmount,
+            },
+          ],
+        }),
+      });
+      setBillPaymentProofFile(null);
+      return result;
+    });
+  }
+
   function createInvoice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedBill) {
       setMessage("请先选择一张账单");
+      return;
+    }
+    const invoiceAmount =
+      selectedBill.uninvoicedAmount ?? selectedBill.totalAmount;
+    if (Number(invoiceAmount) <= 0) {
+      setMessage("登记发票失败：该账单已足额开票。");
       return;
     }
 
@@ -1388,11 +1677,11 @@ export default function Home() {
           invoiceNo: `INV-${Date.now().toString(36).toUpperCase()}`,
           invoiceType: "增值税普通发票",
           issueDate: new Date().toISOString(),
-          amount: selectedBill.totalAmount,
+          amount: invoiceAmount,
           allocations: [
             {
               billId: selectedBill.id,
-              amount: selectedBill.totalAmount,
+              amount: invoiceAmount,
             },
           ],
         }),
@@ -1405,18 +1694,24 @@ export default function Home() {
       setMessage("请先选择一张账单");
       return;
     }
+    const receiptAmount =
+      selectedBill.unreceivedAmount ?? selectedBill.totalAmount;
+    if (Number(receiptAmount) <= 0) {
+      setMessage("登记收款失败：该账单已足额回款。");
+      return;
+    }
 
     void submitAction("登记收款", ["receipt.manage"], () =>
       request("/receipts", {
         method: "POST",
         body: JSON.stringify({
           receivedAt: new Date().toISOString(),
-          amount: selectedBill.totalAmount,
+          amount: receiptAmount,
           account: "默认收款账户",
           allocations: [
             {
               billId: selectedBill.id,
-              amount: selectedBill.totalAmount,
+              amount: receiptAmount,
             },
           ],
         }),
@@ -1646,9 +1941,8 @@ export default function Home() {
             contractIncentiveUnitPrice={contractIncentiveUnitPrice}
             contractServiceFeeRate={contractServiceFeeRate}
             contractStartDate={contractStartDate}
+            contractTierDescription={contractTierDescription}
             contractTierMode={contractTierMode}
-            contractTierRate={contractTierRate}
-            contractTierThreshold={contractTierThreshold}
             contracts={contracts}
             createContract={createContract}
             customers={customers}
@@ -1664,9 +1958,8 @@ export default function Home() {
             setContractIncentiveUnitPrice={setContractIncentiveUnitPrice}
             setContractServiceFeeRate={setContractServiceFeeRate}
             setContractStartDate={setContractStartDate}
+            setContractTierDescription={setContractTierDescription}
             setContractTierMode={setContractTierMode}
-            setContractTierRate={setContractTierRate}
-            setContractTierThreshold={setContractTierThreshold}
             setSelectedCustomerId={setSelectedCustomerId}
             setSelectedContractId={setSelectedContractId}
             updateContractFiles={updateContractFiles}
@@ -1675,12 +1968,47 @@ export default function Home() {
 
         {active === "billing" ? (
           <BillingModule
+            billContentName={billContentName}
+            billInvoiceFile={billInvoiceFile}
+            billPaymentProofFile={billPaymentProofFile}
+            billQuantity={billQuantity}
+            billSettlementFile={billSettlementFile}
             bills={bills}
-            disabledReason={actionBlockReason("bill.manage")}
-            runBilling={runBilling}
+            confirmBillSettlement={confirmBillSettlement}
+            confirmSelectedBillReceipt={confirmSelectedBillReceipt}
+            contracts={contracts}
+            createBusinessBill={createBusinessBill}
+            createSelectedBillInvoice={createSelectedBillInvoice}
+            customers={customers}
+            invoiceDisabledReason={actionBlockReason("invoice.manage")}
+            receiptAccount={receiptAccount}
+            receiptDisabledReason={actionBlockReason("receipt.manage")}
             selectedBillId={selectedBillId}
+            selectedContract={selectedContract}
+            selectedContractId={selectedContractId}
+            selectedCustomerId={selectedCustomerId}
+            setBillContentName={setBillContentName}
+            setBillInvoiceFile={(fileList) =>
+              updateBusinessFile(fileList, setBillInvoiceFile, "发票附件")
+            }
+            setBillPaymentProofFile={(fileList) =>
+              updateBusinessFile(
+                fileList,
+                setBillPaymentProofFile,
+                "银行打款回单",
+              )
+            }
+            setBillQuantity={setBillQuantity}
+            setBillSettlementFile={(fileList) =>
+              updateBusinessFile(fileList, setBillSettlementFile, "盖章结算单")
+            }
+            setReceiptAccount={setReceiptAccount}
             setSelectedBillId={setSelectedBillId}
-            transitionBill={transitionBill}
+            setSelectedContractId={setSelectedContractId}
+            setSelectedCustomerId={setSelectedCustomerId}
+            sendBillToCustomer={sendBillToCustomer}
+            selectedBill={selectedBill}
+            billDisabledReason={actionBlockReason("bill.manage")}
           />
         ) : null}
 
@@ -2079,7 +2407,6 @@ function CustomersModule({
               <th>客户编码</th>
               <th>客户简称</th>
               <th>客户全称</th>
-              <th>状态</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -2094,9 +2421,6 @@ function CustomersModule({
                 <td>{customer.name}</td>
                 <td className="wrap-cell">
                   {customer.fullName ?? customer.name}
-                </td>
-                <td>
-                  <span className="status">{customer.status}</span>
                 </td>
                 <td>
                   <button
@@ -2196,9 +2520,8 @@ function ContractsModule({
   contractIncentiveUnitPrice,
   contractServiceFeeRate,
   contractStartDate,
+  contractTierDescription,
   contractTierMode,
-  contractTierRate,
-  contractTierThreshold,
   contracts,
   createContract,
   customers,
@@ -2214,9 +2537,8 @@ function ContractsModule({
   setContractIncentiveUnitPrice,
   setContractServiceFeeRate,
   setContractStartDate,
+  setContractTierDescription,
   setContractTierMode,
-  setContractTierRate,
-  setContractTierThreshold,
   setSelectedCustomerId,
   setSelectedContractId,
   updateContractFiles,
@@ -2230,9 +2552,8 @@ function ContractsModule({
   contractIncentiveUnitPrice: string;
   contractServiceFeeRate: string;
   contractStartDate: string;
+  contractTierDescription: string;
   contractTierMode: string;
-  contractTierRate: string;
-  contractTierThreshold: string;
   contracts: Contract[];
   createContract: (event: FormEvent<HTMLFormElement>) => void;
   customers: Customer[];
@@ -2248,9 +2569,8 @@ function ContractsModule({
   setContractIncentiveUnitPrice: (value: string) => void;
   setContractServiceFeeRate: (value: string) => void;
   setContractStartDate: (value: string) => void;
+  setContractTierDescription: (value: string) => void;
   setContractTierMode: (value: string) => void;
-  setContractTierRate: (value: string) => void;
-  setContractTierThreshold: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
   setSelectedContractId: (value: string) => void;
   updateContractFiles: (fileList: FileList | null) => void;
@@ -2434,32 +2754,23 @@ function ContractsModule({
                     }
                     value={contractTierMode}
                   >
-                    <option value="ACCUMULATE">增加累加</option>
+                    <option value="NONE">无</option>
+                    <option value="ACCUMULATE">增量累加</option>
                     <option value="FULL_COVERAGE">全量覆盖</option>
                   </select>
                 </label>
-                <label>
-                  达到条件 X
-                  <input
-                    inputMode="decimal"
-                    onChange={(event) =>
-                      setContractTierThreshold(event.target.value)
-                    }
-                    placeholder="留空表示不启用阶梯"
-                    value={contractTierThreshold}
-                  />
-                </label>
-                <label>
-                  服务费比例 Y %
-                  <input
-                    inputMode="decimal"
-                    onChange={(event) =>
-                      setContractTierRate(event.target.value)
-                    }
-                    placeholder="留空表示不启用阶梯"
-                    value={contractTierRate}
-                  />
-                </label>
+                {contractTierMode !== "NONE" ? (
+                  <label>
+                    规则描述
+                    <input
+                      onChange={(event) =>
+                        setContractTierDescription(event.target.value)
+                      }
+                      placeholder="例如 达到约定业务量后按合同附件规则重算"
+                      value={contractTierDescription}
+                    />
+                  </label>
+                ) : null}
                 <label className="full-span">
                   合同附件
                   <input
@@ -2503,72 +2814,198 @@ function ContractsModule({
 }
 
 function BillingModule({
+  billContentName,
+  billDisabledReason,
+  billInvoiceFile,
+  billPaymentProofFile,
+  billQuantity,
+  billSettlementFile,
   bills,
-  disabledReason,
-  runBilling,
+  confirmBillSettlement,
+  confirmSelectedBillReceipt,
+  contracts,
+  createBusinessBill,
+  createSelectedBillInvoice,
+  customers,
+  invoiceDisabledReason,
+  receiptAccount,
+  receiptDisabledReason,
+  selectedBill,
   selectedBillId,
+  selectedContract,
+  selectedContractId,
+  selectedCustomerId,
+  sendBillToCustomer,
+  setBillContentName,
+  setBillInvoiceFile,
+  setBillPaymentProofFile,
+  setBillQuantity,
+  setBillSettlementFile,
+  setReceiptAccount,
   setSelectedBillId,
-  transitionBill,
+  setSelectedContractId,
+  setSelectedCustomerId,
 }: {
+  billContentName: string;
+  billDisabledReason: string;
+  billInvoiceFile: File | null;
+  billPaymentProofFile: File | null;
+  billQuantity: string;
+  billSettlementFile: File | null;
   bills: Bill[];
-  disabledReason: string;
-  runBilling: () => void;
+  confirmBillSettlement: () => void;
+  confirmSelectedBillReceipt: () => void;
+  contracts: Contract[];
+  createBusinessBill: (event: FormEvent<HTMLFormElement>) => void;
+  createSelectedBillInvoice: () => void;
+  customers: Customer[];
+  invoiceDisabledReason: string;
+  receiptAccount: string;
+  receiptDisabledReason: string;
+  selectedBill?: Bill;
   selectedBillId: string;
+  selectedContract?: Contract;
+  selectedContractId: string;
+  selectedCustomerId: string;
+  sendBillToCustomer: () => void;
+  setBillContentName: (value: string) => void;
+  setBillInvoiceFile: (fileList: FileList | null) => void;
+  setBillPaymentProofFile: (fileList: FileList | null) => void;
+  setBillQuantity: (value: string) => void;
+  setBillSettlementFile: (fileList: FileList | null) => void;
+  setReceiptAccount: (value: string) => void;
   setSelectedBillId: (value: string) => void;
-  transitionBill: (path: string, label: string, body?: object) => void;
+  setSelectedContractId: (value: string) => void;
+  setSelectedCustomerId: (value: string) => void;
 }) {
+  const customerContracts = contracts.filter(
+    (contract) =>
+      !selectedCustomerId ||
+      contract.customerId === selectedCustomerId ||
+      contract.customer?.id === selectedCustomerId,
+  );
+  const quantity = Number(billQuantity);
+  const baseFee = selectedContract
+    ? Number(contractBaseFee(selectedContract))
+    : 0;
+  const unitPrice = selectedContract
+    ? Number(selectedContract.incentiveUnitPrice ?? 0)
+    : 0;
+  const serviceFeeRate = selectedContract
+    ? Number(selectedContract.serviceFeeRate ?? 0)
+    : 0;
+  const serviceAmount = Number.isFinite(quantity) ? quantity * unitPrice : 0;
+  const serviceFeeAmount = serviceAmount * (serviceFeeRate / 100);
+  const previewTotal = baseFee + serviceAmount + serviceFeeAmount;
+  const canConfirm =
+    selectedBill?.status === "CUSTOMER_PENDING" && Boolean(billSettlementFile);
+  const canInvoice =
+    Boolean(selectedBill) &&
+    ["CUSTOMER_CONFIRMED", "ADJUSTED"].includes(selectedBill?.status ?? "") &&
+    Number(selectedBill?.uninvoicedAmount ?? selectedBill?.totalAmount ?? 0) >
+      0;
+  const canReceive =
+    Boolean(selectedBill) &&
+    ["CUSTOMER_CONFIRMED", "ADJUSTED"].includes(selectedBill?.status ?? "") &&
+    Number(selectedBill?.unreceivedAmount ?? selectedBill?.totalAmount ?? 0) >
+      0 &&
+    Boolean(billPaymentProofFile);
+
   return (
-    <section className="workspace">
+    <section className="workspace billing-layout">
       <div className="panel">
         <div className="panel-header">
-          <h2>账单流转</h2>
-          <span>生成到确认</span>
+          <h2>生成客户月账单</h2>
+          <span>业务负责人</span>
         </div>
-        <div className="action-strip">
+        <form className="module-form" onSubmit={createBusinessBill}>
+          <label>
+            客户
+            <select
+              onChange={(event) => {
+                const customerId = event.target.value;
+                const nextContract = contracts.find(
+                  (contract) =>
+                    contract.customerId === customerId ||
+                    contract.customer?.id === customerId,
+                );
+                setSelectedCustomerId(customerId);
+                setSelectedContractId(nextContract?.id ?? "");
+              }}
+              value={selectedCustomerId}
+            >
+              <option value="">选择客户</option>
+              {customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            合同
+            <select
+              onChange={(event) => setSelectedContractId(event.target.value)}
+              value={selectedContractId}
+            >
+              <option value="">选择合同</option>
+              {customerContracts.map((contract) => (
+                <option key={contract.id} value={contract.id}>
+                  {contract.code} · {contractPeriod(contract)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            合作内容
+            <input
+              onChange={(event) => setBillContentName(event.target.value)}
+              value={billContentName}
+            />
+          </label>
+          <label>
+            数量
+            <input
+              inputMode="decimal"
+              onChange={(event) => setBillQuantity(event.target.value)}
+              value={billQuantity}
+            />
+          </label>
+          <div className="definition-list compact">
+            <div>
+              <span>基础费用</span>
+              <strong>{money(baseFee)}</strong>
+            </div>
+            <div>
+              <span>激励单价</span>
+              <strong>{money(unitPrice)}</strong>
+            </div>
+            <div>
+              <span>服务费比例</span>
+              <strong>{rateText(selectedContract?.serviceFeeRate)}</strong>
+            </div>
+            <div>
+              <span>阶梯规则</span>
+              <strong>
+                {selectedContract ? contractTierSummary(selectedContract) : "-"}
+              </strong>
+            </div>
+            <div>
+              <span>账单预估</span>
+              <strong>{money(previewTotal)}</strong>
+            </div>
+          </div>
+          {billDisabledReason ? (
+            <small className="form-note">{billDisabledReason}</small>
+          ) : null}
           <button
             className="primary"
-            disabled={Boolean(disabledReason)}
-            onClick={runBilling}
-            type="button"
+            disabled={Boolean(billDisabledReason)}
+            type="submit"
           >
-            生成本月账单
+            生成账单
           </button>
-          <button
-            disabled={Boolean(disabledReason)}
-            onClick={() => transitionBill("submit", "提交内部审核")}
-            type="button"
-          >
-            提交内部审核
-          </button>
-          <button
-            disabled={Boolean(disabledReason)}
-            onClick={() => transitionBill("finance-review", "提交财务审核")}
-            type="button"
-          >
-            财务审核
-          </button>
-          <button
-            disabled={Boolean(disabledReason)}
-            onClick={() => transitionBill("send-to-customer", "发送客户确认")}
-            type="button"
-          >
-            发给客户
-          </button>
-          <button
-            disabled={Boolean(disabledReason)}
-            onClick={() =>
-              transitionBill("confirm-customer", "客户确认", {
-                confirmedByName: "客户联系人",
-              })
-            }
-            type="button"
-          >
-            客户确认
-          </button>
-          {disabledReason ? (
-            <small className="form-note">{disabledReason}</small>
-          ) : null}
-        </div>
+        </form>
       </div>
 
       <TablePanel title="账单列表" count={`${bills.length} 条`}>
@@ -2578,7 +3015,138 @@ function BillingModule({
           selectedBillId={selectedBillId}
         />
       </TablePanel>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>客户确认</h2>
+          <span>{selectedBill?.billNo ?? "未选择账单"}</span>
+        </div>
+        <div className="settlement-flow">
+          <button
+            disabled={Boolean(billDisabledReason) || !selectedBill}
+            onClick={sendBillToCustomer}
+            type="button"
+          >
+            发送客户确认
+          </button>
+          <label>
+            盖章结算单
+            <input
+              accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
+              onChange={(event) => setBillSettlementFile(event.target.files)}
+              type="file"
+            />
+          </label>
+          <button
+            className="primary"
+            disabled={Boolean(billDisabledReason) || !canConfirm}
+            onClick={confirmBillSettlement}
+            type="button"
+          >
+            客户确认
+          </button>
+          <small className="file-list">
+            {billSettlementFile?.name ?? "未选择盖章结算单"}
+          </small>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <h2>财务结算</h2>
+          <span>
+            {selectedBill ? money(selectedBill.totalAmount) : "未选择账单"}
+          </span>
+        </div>
+        <div className="settlement-flow">
+          <label>
+            发票附件
+            <input
+              accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
+              onChange={(event) => setBillInvoiceFile(event.target.files)}
+              type="file"
+            />
+          </label>
+          <button
+            disabled={Boolean(invoiceDisabledReason) || !canInvoice}
+            onClick={createSelectedBillInvoice}
+            type="button"
+          >
+            关联账单发票
+          </button>
+          <label>
+            银行打款回单
+            <input
+              accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
+              onChange={(event) => setBillPaymentProofFile(event.target.files)}
+              type="file"
+            />
+          </label>
+          <label>
+            收款账户
+            <input
+              onChange={(event) => setReceiptAccount(event.target.value)}
+              value={receiptAccount}
+            />
+          </label>
+          <button
+            className="primary"
+            disabled={Boolean(receiptDisabledReason) || !canReceive}
+            onClick={confirmSelectedBillReceipt}
+            type="button"
+          >
+            确认到账
+          </button>
+          <small className="file-list">
+            {[billInvoiceFile?.name, billPaymentProofFile?.name]
+              .filter(Boolean)
+              .join("、") || "未选择财务附件"}
+          </small>
+        </div>
+      </div>
+
+      <BillDetail bill={selectedBill} />
     </section>
+  );
+}
+
+function BillDetail({ bill }: { bill?: Bill }) {
+  if (!bill) {
+    return (
+      <div className="panel">
+        <div className="panel-header">
+          <h2>账单明细</h2>
+          <span>未选择账单</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <TablePanel title="账单明细" count={`${bill.items?.length ?? 0} 条`}>
+      <table>
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>说明</th>
+            <th>单价</th>
+            <th>数量</th>
+            <th>金额</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(bill.items ?? []).map((item, index) => (
+            <tr key={item.id ?? `${item.name}-${index}`}>
+              <td>{item.name}</td>
+              <td className="wrap-cell">{item.description ?? "-"}</td>
+              <td>{money(item.amount)}</td>
+              <td>{item.quantity}</td>
+              <td>{money(item.lineTotal)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </TablePanel>
   );
 }
 

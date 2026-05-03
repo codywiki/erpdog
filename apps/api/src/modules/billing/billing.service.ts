@@ -297,7 +297,9 @@ export class BillingService {
       const quantity = optionalDecimal(item.quantity, new Prisma.Decimal(1));
       return {
         sourceType: (optionalString(item, "sourceType") ??
-          ChargeSourceType.MANUAL) as ChargeSourceType,
+          (contractId
+            ? ChargeSourceType.CONTRACT
+            : ChargeSourceType.MANUAL)) as ChargeSourceType,
         name: stringField(item, "name"),
         description: optionalString(item, "description"),
         amount,
@@ -567,7 +569,11 @@ export class BillingService {
 
   private ensureTransitionAllowed(from: BillStatus, to: BillStatus) {
     const allowed: Record<BillStatus, BillStatus[]> = {
-      DRAFT: [BillStatus.INTERNAL_REVIEW, BillStatus.VOIDED],
+      DRAFT: [
+        BillStatus.INTERNAL_REVIEW,
+        BillStatus.CUSTOMER_PENDING,
+        BillStatus.VOIDED,
+      ],
       INTERNAL_REVIEW: [BillStatus.FINANCE_REVIEW, BillStatus.VOIDED],
       FINANCE_REVIEW: [BillStatus.CUSTOMER_PENDING, BillStatus.VOIDED],
       CUSTOMER_PENDING: [BillStatus.CUSTOMER_CONFIRMED, BillStatus.VOIDED],

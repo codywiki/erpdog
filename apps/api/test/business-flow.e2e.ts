@@ -288,6 +288,85 @@ async function main() {
     const contractId = contractImport.results[0]?.id;
     assert(contractId, "Imported contract id missing.");
 
+    const businessPeriodMonth = "2026-03";
+    const businessBill = await request<{
+      id: string;
+      totalAmount: string;
+    }>(client, "/bills", {
+      method: "POST",
+      body: {
+        customerId,
+        contractId,
+        periodMonth: businessPeriodMonth,
+        items: [
+          {
+            name: "基础费用",
+            amount: "1000.00",
+            quantity: "1",
+            description: "E2E contract base fee",
+          },
+          {
+            name: "月度合作内容",
+            amount: "20.00",
+            quantity: "5",
+            description: "E2E monthly service quantity",
+          },
+          {
+            name: "服务费",
+            amount: "10.00",
+            quantity: "1",
+            description: "E2E contract service rate",
+          },
+        ],
+      },
+    });
+    assert(businessBill.id, "Business bill was not created.");
+    await request(client, `/bills/${businessBill.id}/send-to-customer`, {
+      method: "POST",
+    });
+    const businessConfirmedBill = await request<{ totalAmount: string }>(
+      client,
+      `/bills/${businessBill.id}/confirm-customer`,
+      {
+        method: "POST",
+        body: {
+          confirmedByName: "E2E 客户",
+          note: "E2E stamped settlement confirmed",
+        },
+      },
+    );
+    await request(client, "/invoices", {
+      method: "POST",
+      body: {
+        invoiceNo: `INV-BIZ-${runId}`,
+        invoiceType: "增值税普通发票",
+        issueDate: "2026-03-28",
+        amount: businessConfirmedBill.totalAmount,
+        allocations: [
+          {
+            billId: businessBill.id,
+            amount: businessConfirmedBill.totalAmount,
+          },
+        ],
+      },
+    });
+    await request(client, "/receipts", {
+      method: "POST",
+      body: {
+        receiptNo: `RCPT-BIZ-${runId}`,
+        receivedAt: "2026-03-30",
+        amount: businessConfirmedBill.totalAmount,
+        account: "E2E Bank",
+        payer: "E2E 客户",
+        allocations: [
+          {
+            billId: businessBill.id,
+            amount: businessConfirmedBill.totalAmount,
+          },
+        ],
+      },
+    });
+
     const extraCharge = await request<{ id: string }>(
       client,
       "/extra-charges",
