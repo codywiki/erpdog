@@ -1268,6 +1268,18 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (!message) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setMessage((current) => (current === message ? "" : current));
+    }, 3000);
+
+    return () => window.clearTimeout(timer);
+  }, [message]);
+
+  useEffect(() => {
     const cachedSession = readAuthSessionCookie();
     if (!cachedSession) {
       return;
