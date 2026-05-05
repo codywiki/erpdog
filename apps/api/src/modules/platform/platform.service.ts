@@ -584,6 +584,14 @@ export class PlatformService {
       const permissions = await tx.permission.findMany({
         where: { code: { in: definition.permissions } },
       });
+      await tx.rolePermission.deleteMany({
+        where: {
+          roleId: role.id,
+          permissionId: {
+            notIn: permissions.map((permission) => permission.id),
+          },
+        },
+      });
       await tx.rolePermission.createMany({
         data: permissions.map((permission) => ({
           roleId: role.id,

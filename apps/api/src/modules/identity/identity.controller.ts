@@ -23,7 +23,6 @@ export class IdentityController {
   constructor(private readonly identity: IdentityService) {}
 
   @Get("identity/users")
-  @RequirePermissions(PERMISSION_CODES.USER_MANAGE)
   listUsers(
     @CurrentUser() user: AuthenticatedUser,
     @Query("page") page?: string,
@@ -33,13 +32,11 @@ export class IdentityController {
   }
 
   @Post("identity/users")
-  @RequirePermissions(PERMISSION_CODES.USER_MANAGE)
   createUser(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
     return this.identity.createUser(user, body);
   }
 
   @Patch("identity/users/:id")
-  @RequirePermissions(PERMISSION_CODES.USER_MANAGE)
   updateUser(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
@@ -49,13 +46,11 @@ export class IdentityController {
   }
 
   @Get("identity/roles")
-  @RequirePermissions(PERMISSION_CODES.USER_MANAGE)
   listRoles(@CurrentUser() user: AuthenticatedUser) {
     return this.identity.listRoles(user);
   }
 
   @Patch("identity/roles/:id/permissions")
-  @RequirePermissions(PERMISSION_CODES.USER_MANAGE)
   updateRolePermissions(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,

@@ -171,11 +171,16 @@ async function main() {
       },
     });
 
-    for (const permissionCode of roleDefinition.permissions) {
-      const permission = await prisma.permission.findUniqueOrThrow({
-        where: { code: permissionCode },
-      });
-
+    const permissions = await prisma.permission.findMany({
+      where: { code: { in: roleDefinition.permissions } },
+    });
+    await prisma.rolePermission.deleteMany({
+      where: {
+        roleId: role.id,
+        permissionId: { notIn: permissions.map((permission) => permission.id) },
+      },
+    });
+    for (const permission of permissions) {
       await prisma.rolePermission.upsert({
         where: {
           roleId_permissionId: {
@@ -212,11 +217,16 @@ async function main() {
       },
     });
 
-    for (const permissionCode of roleDefinition.permissions) {
-      const permission = await prisma.permission.findUniqueOrThrow({
-        where: { code: permissionCode },
-      });
-
+    const permissions = await prisma.permission.findMany({
+      where: { code: { in: roleDefinition.permissions } },
+    });
+    await prisma.rolePermission.deleteMany({
+      where: {
+        roleId: role.id,
+        permissionId: { notIn: permissions.map((permission) => permission.id) },
+      },
+    });
+    for (const permission of permissions) {
       await prisma.rolePermission.upsert({
         where: {
           roleId_permissionId: {

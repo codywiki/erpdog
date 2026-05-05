@@ -141,12 +141,9 @@ export class IdentityService {
   async createUser(user: AuthenticatedUser, rawBody: unknown) {
     this.ensureIdentityManagementAccess(user);
     const body = bodyObject(rawBody);
-    const email = stringField(body, "email").toLowerCase();
-    this.ensureEmail(email);
-    const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      throw new ConflictException("Email already exists.");
-    }
+    const account = this.userAccountFields(body);
+    await this.ensureEmailAvailable(account.email);
+    await this.ensurePhoneAvailable(account.phone);
 
     const roleCodes = this.roleCodes(body);
     this.ensureRoleManagementAccess(user, roleCodes);
@@ -157,7 +154,8 @@ export class IdentityService {
       const nextUser = await tx.user.create({
         data: {
           orgId: user.orgId,
-          email,
+          email: account.email,
+          phone: account.phone,
           name: stringField(body, "name"),
           passwordHash: await this.password.hash(password),
           isActive: booleanField(body, "isActive", true),
@@ -177,6 +175,7 @@ export class IdentityService {
           entityId: nextUser.id,
           after: {
             email: nextUser.email,
+            phone: nextUser.phone,
             name: nextUser.name,
             roles: roleCodes,
           },
@@ -200,16 +199,9 @@ export class IdentityService {
       throw new NotFoundException("User not found.");
     }
 
-    const nextEmail = optionalString(body, "email")?.toLowerCase();
-    if (nextEmail && nextEmail !== before.email) {
-      this.ensureEmail(nextEmail);
-      const existing = await this.prisma.user.findUnique({
-        where: { email: nextEmail },
-      });
-      if (existing) {
-        throw new ConflictException("Email already exists.");
-      }
-    }
+    const account = this.userAccountFields(body, before);
+    await this.ensureEmailAvailable(account.email, before.id);
+    await this.ensurePhoneAvailable(account.phone, before.id);
 
     const hasRoleUpdate = Array.isArray(body.roleCodes);
     const isSelfUpdate = id === user.id;
@@ -237,7 +229,8 @@ export class IdentityService {
       await tx.user.update({
         where: { id },
         data: {
-          email: nextEmail ?? before.email,
+          email: account.email,
+          phone: account.phone,
           name: optionalString(body, "name") ?? before.name,
           passwordHash:
             optionalString(body, "password") !== undefined
@@ -263,7 +256,8 @@ export class IdentityService {
           entityId: id,
           before: this.auditUser(before),
           after: {
-            email: nextEmail ?? before.email,
+            email: account.email,
+            phone: account.phone,
             name: optionalString(body, "name") ?? before.name,
             isActive: nextIsActive,
             roles: roleCodes,
@@ -516,6 +510,73 @@ export class IdentityService {
     }
   }
 
+  private userAccountFields(body: Payload, before?: UserWithRoles) {
+    const account = optionalString(body, "account")?.trim();
+    if (account) {
+      if (account.includes("@")) {
+        const email = account.toLowerCase();
+        this.ensureEmail(email);
+        return { email, phone: null };
+      }
+
+      this.ensurePhone(account);
+      return { email: this.generatedEmail(account), phone: account };
+    }
+
+    const explicitEmail = optionalString(body, "email")?.trim();
+    const explicitPhone = optionalString(body, "phone")?.trim();
+    const email =
+      explicitEmail !== undefined
+        ? explicitEmail.toLowerCase()
+        : (before?.email ??
+          (explicitPhone ? this.generatedEmail(explicitPhone) : ""));
+    const phone =
+      explicitPhone !== undefined
+        ? explicitPhone || null
+        : (before?.phone ?? null);
+
+    if (!email) {
+      throw new BadRequestException("account is required.");
+    }
+    this.ensureEmail(email);
+    if (phone) {
+      this.ensurePhone(phone);
+    }
+
+    return { email, phone };
+  }
+
+  private ensurePhone(phone: string) {
+    if (!/^[0-9+\-\s]{6,30}$/.test(phone)) {
+      throw new BadRequestException("phone must be valid.");
+    }
+  }
+
+  private async ensureEmailAvailable(email: string, exceptUserId?: string) {
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing && existing.id !== exceptUserId) {
+      throw new ConflictException("Email already exists.");
+    }
+  }
+
+  private async ensurePhoneAvailable(
+    phone: string | null,
+    exceptUserId?: string,
+  ) {
+    if (!phone) {
+      return;
+    }
+    const existing = await this.prisma.user.findUnique({ where: { phone } });
+    if (existing && existing.id !== exceptUserId) {
+      throw new ConflictException("Phone already exists.");
+    }
+  }
+
+  private generatedEmail(phone: string) {
+    const normalized = phone.replace(/\D/g, "") || "account";
+    return `user-${normalized}@phone.erpdog.local`;
+  }
+
   private ensurePassword(password: string) {
     if (password.length < 10) {
       throw new BadRequestException("password must be at least 10 characters.");
@@ -550,6 +611,7 @@ export class IdentityService {
   private auditUser(user: UserWithRoles) {
     return {
       email: user.email,
+      phone: user.phone,
       name: user.name,
       isActive: user.isActive,
       roles: this.roleCodesForUser(user),

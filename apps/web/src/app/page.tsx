@@ -478,6 +478,9 @@ function translateErrorMessage(message: string) {
   if (/Email already exists/i.test(message)) {
     return "该邮箱已存在，请换一个。";
   }
+  if (/account is required/i.test(message)) {
+    return "登录账号不能为空。";
+  }
   if (/email must be valid/i.test(message)) {
     return "邮箱格式不正确。";
   }
@@ -1167,11 +1170,25 @@ export default function Home() {
   const isLoggedIn = Boolean(token && user);
   const userRoleCodes = user?.roles ?? [];
   const isSuperAdmin = userRoleCodes.includes("super_admin");
+  const hasTenantIdentityAccess =
+    userRoleCodes.includes("admin") || userRoleCodes.includes("owner");
   const isPlatformModule = platformModuleIds.includes(active);
-  const hasPermission = (...permissions: string[]) =>
-    permissions.length === 0 ||
-    (user?.permissions.some((permission) => permissions.includes(permission)) ??
-      false);
+  const hasPermission = (...permissions: string[]) => {
+    if (permissions.length === 0) {
+      return true;
+    }
+    if (permissions.includes("tenant.manage")) {
+      return isSuperAdmin;
+    }
+    if (permissions.includes("user.manage") && hasTenantIdentityAccess) {
+      return true;
+    }
+    return (
+      user?.permissions.some((permission) =>
+        permissions.includes(permission),
+      ) ?? false
+    );
+  };
   const tenantRoleOptions = roles.filter((role) =>
     tenantAdminDelegatedRoleCodes.includes(role.code),
   );
@@ -1363,10 +1380,24 @@ export default function Home() {
     }
 
     const authHeader = { Authorization: `Bearer ${nextToken}` };
-    const can = (...permissions: string[]) =>
-      nextUser?.permissions.some((permission) =>
-        permissions.includes(permission),
-      ) ?? false;
+    const nextUserRoleCodes = nextUser?.roles ?? [];
+    const nextIsSuperAdmin = nextUserRoleCodes.includes("super_admin");
+    const nextHasTenantIdentityAccess =
+      nextUserRoleCodes.includes("admin") ||
+      nextUserRoleCodes.includes("owner");
+    const can = (...permissions: string[]) => {
+      if (permissions.includes("tenant.manage")) {
+        return nextIsSuperAdmin;
+      }
+      if (permissions.includes("user.manage") && nextHasTenantIdentityAccess) {
+        return true;
+      }
+      return (
+        nextUser?.permissions.some((permission) =>
+          permissions.includes(permission),
+        ) ?? false
+      );
+    };
     const fetchJson = async <TValue,>(path: string): Promise<TValue> => {
       const response = await fetch(`${apiBase}${path}`, {
         headers: authHeader,
@@ -1476,12 +1507,12 @@ export default function Home() {
       ),
       fetchIf<Role[]>(can("user.manage"), "/identity/roles", []),
       fetchIf<ConsoleUser[] | PaginatedResponse<ConsoleUser>>(
-        can("tenant.manage"),
+        nextIsSuperAdmin,
         "/super-admins?pageSize=100",
         emptyPage<ConsoleUser>(),
       ),
       fetchIf<Tenant[] | PaginatedResponse<Tenant>>(
-        can("tenant.manage"),
+        nextIsSuperAdmin,
         "/tenants?pageSize=100",
         emptyPage<Tenant>(),
       ),
@@ -1698,7 +1729,7 @@ export default function Home() {
     }
 
     setEditingUserId(item.id);
-    setNewUserEmail(item.email);
+    setNewUserEmail(item.phone ?? item.email);
     setNewUserName(item.name);
     setNewUserPassword("");
     setNewUserRoleCode(
@@ -2028,7 +2059,7 @@ export default function Home() {
     const isEditing = Boolean(editingUserId);
     const isEditingSelf = Boolean(editingUserId && editingUserId === user?.id);
     if (!newUserEmail.trim() || !newUserName.trim()) {
-      setMessage("保存用户失败：邮箱和姓名不能为空。");
+      setMessage("保存用户失败：登录账号和姓名不能为空。");
       return;
     }
     if (!isEditing && !newUserPassword.trim()) {
@@ -2045,7 +2076,7 @@ export default function Home() {
       ["user.manage"],
       async () => {
         const payload = {
-          email: newUserEmail,
+          account: newUserEmail,
           name: newUserName,
           ...(isEditingSelf
             ? {}
@@ -4710,7 +4741,7 @@ function IdentityModule({
           <thead>
             <tr>
               <th>姓名</th>
-              <th>邮箱</th>
+              <th>登录账号</th>
               <th>角色</th>
               <th>状态</th>
               <th>操作</th>
@@ -4720,7 +4751,7 @@ function IdentityModule({
             {users.map((item) => (
               <tr key={item.id}>
                 <td>{item.name}</td>
-                <td>{item.email}</td>
+                <td>{item.phone ?? item.email}</td>
                 <td>{item.roles.map((role) => role.name).join("、")}</td>
                 <td>
                   <span className="status">
@@ -4766,11 +4797,11 @@ function IdentityModule({
             </div>
             <form className="module-form" onSubmit={createConsoleUser}>
               <label>
-                邮箱
+                登录账号
                 <input
-                  autoComplete="email"
+                  autoComplete="username"
                   onChange={(event) => setNewUserEmail(event.target.value)}
-                  placeholder="例如 user@company.com"
+                  placeholder="手机号或邮箱"
                   value={newUserEmail}
                 />
               </label>
@@ -4829,7 +4860,7 @@ function IdentityModule({
               </label>
               {isEditingSelf ? (
                 <small className="form-note">
-                  当前账号只能修改邮箱、姓名和密码，角色与启用状态保持不变。
+                  当前账号只能修改登录账号、姓名和密码，角色与启用状态保持不变。
                 </small>
               ) : null}
               {disabledReason ? (
