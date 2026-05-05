@@ -3,7 +3,6 @@ export const ROLE_CODES = {
   OWNER: "owner",
   FINANCE: "finance",
   BUSINESS_OWNER: "business_owner",
-  CUSTOMER_MANAGER: "customer_manager",
 } as const;
 
 export type RoleCode = (typeof ROLE_CODES)[keyof typeof ROLE_CODES];
@@ -97,6 +96,7 @@ export type ReceiptStatus =
 
 export const PAYABLE_STATUSES = {
   UNPAID: "UNPAID",
+  CONFIRMED: "CONFIRMED",
   PARTIALLY_PAID: "PARTIALLY_PAID",
   PAID: "PAID",
   VOIDED: "VOIDED",

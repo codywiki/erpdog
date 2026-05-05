@@ -302,8 +302,6 @@ const permissionLabels: Record<string, string> = {
   "payment_request.create": "发起付款申请",
   "payment_request.approve": "审批付款申请",
   "payment.pay": "登记付款",
-  "period.close": "月度结账",
-  "period.reopen": "解锁账期",
   "report.view": "查看报表",
   "audit.view": "查看审计",
 };
@@ -416,6 +414,15 @@ function translateErrorMessage(message: string) {
   }
   if (/You do not have permission/i.test(message)) {
     return "当前账号没有权限执行此操作。";
+  }
+  if (/You cannot manage tenant users/i.test(message)) {
+    return "当前账号不能管理租户用户。";
+  }
+  if (/You cannot manage this role/i.test(message)) {
+    return "当前账号不能管理该角色。";
+  }
+  if (/You cannot grant one or more permissions/i.test(message)) {
+    return "当前账号不能分配其中一个或多个权限。";
   }
   if (/Customer already exists/i.test(message)) {
     return "该客户已存在，不能重复新建。";
@@ -567,11 +574,7 @@ const paymentRecipientPlatformText: Record<PaymentRecipientPlatform, string> = {
   ALIPAY: "支付宝",
 };
 
-const ownerDelegatedRoleCodes = [
-  "business_owner",
-  "customer_manager",
-  "finance",
-];
+const ownerDelegatedRoleCodes = ["business_owner", "finance"];
 
 const taxpayerTypeText: Record<TaxpayerType, string> = {
   SMALL_SCALE: "小规模纳税人",
@@ -865,6 +868,9 @@ export default function Home() {
   const [message, setMessage] = useState(loginRequiredMessage);
   const [loginDialogOpen, setLoginDialogOpen] = useState(false);
   const [active, setActive] = useState<ModuleId>("dashboard");
+  const [expandedNavGroups, setExpandedNavGroups] = useState<
+    Record<string, boolean>
+  >({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [signingEntities, setSigningEntities] = useState<SigningEntity[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -2481,6 +2487,13 @@ export default function Home() {
     setAttachmentPreview(null);
   }
 
+  function toggleNavGroup(label: string) {
+    setExpandedNavGroups((current) => ({
+      ...current,
+      [label]: !current[label],
+    }));
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -2492,6 +2505,7 @@ export default function Home() {
           {navItems.map((item) => {
             if (item.kind === "group") {
               const isGroupActive = item.children.includes(active);
+              const isGroupExpanded = expandedNavGroups[item.label] ?? false;
 
               return (
                 <div
@@ -2500,29 +2514,35 @@ export default function Home() {
                   key={item.label}
                 >
                   <button
+                    aria-expanded={isGroupExpanded}
                     className="nav-group-button"
                     data-active={isGroupActive}
-                    onClick={() => setActive(item.children[0])}
+                    onClick={() => toggleNavGroup(item.label)}
                     type="button"
                   >
-                    {item.label}
+                    <span>{item.label}</span>
+                    <span aria-hidden="true" className="nav-caret">
+                      {isGroupExpanded ? "-" : "+"}
+                    </span>
                   </button>
-                  <div className="sub-nav" aria-label={item.label}>
-                    {item.children.map((childId) => {
-                      const child = getModuleMeta(childId);
+                  {isGroupExpanded ? (
+                    <div className="sub-nav" aria-label={item.label}>
+                      {item.children.map((childId) => {
+                        const child = getModuleMeta(childId);
 
-                      return (
-                        <button
-                          data-active={active === child.id}
-                          key={child.id}
-                          onClick={() => setActive(child.id)}
-                          type="button"
-                        >
-                          {child.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                        return (
+                          <button
+                            data-active={active === child.id}
+                            key={child.id}
+                            onClick={() => setActive(child.id)}
+                            type="button"
+                          >
+                            {child.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
               );
             }

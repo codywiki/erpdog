@@ -146,6 +146,13 @@ label {
 
 .nav-group-button {
   font-weight: 700;
+  justify-content: space-between;
+}
+
+.nav-caret {
+  color: #b9c8c1;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .sub-nav {

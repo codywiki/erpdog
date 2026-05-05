@@ -48,7 +48,6 @@ const userInclude = {
 
 const ownerManagedRoleCodes: Set<string> = new Set([
   ROLE_CODES.BUSINESS_OWNER,
-  ROLE_CODES.CUSTOMER_MANAGER,
   ROLE_CODES.FINANCE,
 ]);
 
@@ -83,8 +82,16 @@ export class IdentityService {
   ) {}
 
   async listUsers(user: AuthenticatedUser, paginationQuery: PaginationQuery) {
+    this.ensureIdentityManagementAccess(user);
     const pagination = parsePagination(paginationQuery);
     const where: Prisma.UserWhereInput = { orgId: user.orgId };
+    if (this.canManageDelegatedRolesOnly(user)) {
+      where.userRoles = {
+        every: {
+          role: { code: { in: Array.from(ownerManagedRoleCodes) } },
+        },
+      };
+    }
     const [items, total] = await this.prisma.$transaction([
       this.prisma.user.findMany({
         where,
@@ -104,6 +111,7 @@ export class IdentityService {
   }
 
   async createUser(user: AuthenticatedUser, rawBody: unknown) {
+    this.ensureIdentityManagementAccess(user);
     const body = bodyObject(rawBody);
     const email = stringField(body, "email").toLowerCase();
     this.ensureEmail(email);
@@ -154,6 +162,7 @@ export class IdentityService {
   }
 
   async updateUser(user: AuthenticatedUser, id: string, rawBody: unknown) {
+    this.ensureIdentityManagementAccess(user);
     const body = bodyObject(rawBody);
     const before = await this.prisma.user.findFirst({
       where: { id, orgId: user.orgId },
@@ -179,10 +188,11 @@ export class IdentityService {
       throw new ConflictException("You cannot change your own roles.");
     }
 
-    const roleCodes = hasRoleUpdate ? this.roleCodes(body) : [];
+    const beforeRoleCodes = this.roleCodesForUser(before);
+    this.ensureRoleManagementAccess(user, beforeRoleCodes);
+    const roleCodes = hasRoleUpdate ? this.roleCodes(body) : beforeRoleCodes;
     if (hasRoleUpdate) {
       this.ensureRoleManagementAccess(user, roleCodes);
-      this.ensureRoleManagementAccess(user, this.roleCodesForUser(before));
     }
     const nextIsActive = booleanField(body, "isActive", before.isActive);
     if (id === user.id && !nextIsActive) {
@@ -225,7 +235,7 @@ export class IdentityService {
             email: nextEmail ?? before.email,
             name: optionalString(body, "name") ?? before.name,
             isActive: nextIsActive,
-            roles: hasRoleUpdate ? roleCodes : this.roleCodesForUser(before),
+            roles: roleCodes,
           },
         },
       });
@@ -240,8 +250,14 @@ export class IdentityService {
   }
 
   listRoles(user: AuthenticatedUser) {
+    this.ensureIdentityManagementAccess(user);
     return this.prisma.role.findMany({
-      where: { orgId: user.orgId },
+      where: {
+        orgId: user.orgId,
+        ...(this.canManageDelegatedRolesOnly(user)
+          ? { code: { in: Array.from(ownerManagedRoleCodes) } }
+          : {}),
+      },
       include: {
         permissions: {
           include: { permission: true },
@@ -257,6 +273,7 @@ export class IdentityService {
     roleId: string,
     rawBody: unknown,
   ) {
+    this.ensureIdentityManagementAccess(user);
     const body = bodyObject(rawBody);
     const before = await this.prisma.role.findFirst({
       where: { id: roleId, orgId: user.orgId },
@@ -384,11 +401,11 @@ export class IdentityService {
     user: AuthenticatedUser,
     roleCodes: string[],
   ) {
-    if (user.roles.includes(ROLE_CODES.ADMIN)) {
+    if (this.canManageAllRoles(user)) {
       return;
     }
     if (
-      user.roles.includes(ROLE_CODES.OWNER) &&
+      this.canManageDelegatedRolesOnly(user) &&
       roleCodes.every((code) => ownerManagedRoleCodes.has(code))
     ) {
       return;
@@ -401,17 +418,39 @@ export class IdentityService {
     user: AuthenticatedUser,
     permissionCodes: string[],
   ) {
-    if (user.roles.includes(ROLE_CODES.ADMIN)) {
+    if (this.canManageAllRoles(user)) {
       return;
     }
     if (
-      user.roles.includes(ROLE_CODES.OWNER) &&
+      this.canManageDelegatedRolesOnly(user) &&
       permissionCodes.every((code) => ownerGrantablePermissionCodes.has(code))
     ) {
       return;
     }
 
     throw new ForbiddenException("You cannot grant one or more permissions.");
+  }
+
+  private ensureIdentityManagementAccess(user: AuthenticatedUser) {
+    if (
+      this.canManageAllRoles(user) ||
+      this.canManageDelegatedRolesOnly(user)
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException("You cannot manage tenant users.");
+  }
+
+  private canManageAllRoles(user: AuthenticatedUser) {
+    return user.roles.includes(ROLE_CODES.ADMIN);
+  }
+
+  private canManageDelegatedRolesOnly(user: AuthenticatedUser) {
+    return (
+      user.roles.includes(ROLE_CODES.OWNER) &&
+      !user.roles.includes(ROLE_CODES.ADMIN)
+    );
   }
 
   private ensureEmail(email: string) {
