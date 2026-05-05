@@ -3,7 +3,10 @@
 import { FormEvent, useEffect, useState } from "react";
 
 type ApiUser = {
+  id: string;
+  orgId: string;
   email: string;
+  phone?: string | null;
   name: string;
   roles?: string[];
   permissions: string[];
@@ -223,10 +226,31 @@ type Role = {
 
 type ConsoleUser = {
   id: string;
+  orgId?: string;
+  org?: {
+    id: string;
+    code: string;
+    name: string;
+    isActive: boolean;
+    isPlatform: boolean;
+  };
   email: string;
+  phone?: string | null;
   name: string;
   isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
   roles: Role[];
+};
+
+type Tenant = {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  users: ConsoleUser[];
 };
 
 type AuditLog = {
@@ -263,6 +287,8 @@ type ConsoleData = {
   paymentRequests: PaymentRequest[];
   payments: Payment[];
   users: ConsoleUser[];
+  superAdmins: ConsoleUser[];
+  tenants: Tenant[];
   roles: Role[];
   auditLogs: AuditLog[];
   profits: ProfitRow[];
@@ -287,6 +313,7 @@ type AuthSession = {
 };
 
 const permissionLabels: Record<string, string> = {
+  "tenant.manage": "租户管理",
   "user.manage": "用户管理",
   "customer.read_all": "查看全部客户",
   "customer.read_own": "查看负责客户",
@@ -363,7 +390,12 @@ function isApiUser(value: unknown): value is ApiUser {
 
   const candidate = value as Partial<ApiUser>;
   return (
+    typeof candidate.id === "string" &&
+    typeof candidate.orgId === "string" &&
     typeof candidate.email === "string" &&
+    (candidate.phone === undefined ||
+      candidate.phone === null ||
+      typeof candidate.phone === "string") &&
     typeof candidate.name === "string" &&
     (candidate.roles === undefined ||
       (Array.isArray(candidate.roles) &&
@@ -427,11 +459,26 @@ function translateErrorMessage(message: string) {
   if (/You cannot manage tenant users/i.test(message)) {
     return "当前账号不能管理租户用户。";
   }
+  if (/You cannot manage tenants/i.test(message)) {
+    return "当前账号不能管理租户和超级管理员。";
+  }
   if (/You cannot manage this role/i.test(message)) {
     return "当前账号不能管理该角色。";
   }
   if (/You cannot grant one or more permissions/i.test(message)) {
     return "当前账号不能分配其中一个或多个权限。";
+  }
+  if (/Invalid email or password/i.test(message)) {
+    return "账号或密码不正确。";
+  }
+  if (/Too many failed login attempts/i.test(message)) {
+    return "登录失败次数过多，请稍后再试。";
+  }
+  if (/Email already exists/i.test(message)) {
+    return "该邮箱已存在，请换一个。";
+  }
+  if (/email must be valid/i.test(message)) {
+    return "邮箱格式不正确。";
   }
   if (/Customer already exists/i.test(message)) {
     return "该客户已存在，不能重复新建。";
@@ -476,8 +523,17 @@ function translateErrorMessage(message: string) {
   if (/Payment attachment must belong to this payment flow/i.test(message)) {
     return "付款附件必须属于当前应付或付款申请。";
   }
+  if (/Phone already exists/i.test(message)) {
+    return "该手机号已存在，请换一个。";
+  }
+  if (/confirmPassword must match password/i.test(message)) {
+    return "两次密码输入不一致。";
+  }
+  if (/phone must be valid/i.test(message)) {
+    return "手机号格式不正确。";
+  }
   if (/Unique constraint failed|already exists/i.test(message)) {
-    return "编码或邮箱已存在，请换一个。";
+    return "编码、邮箱或手机号已存在，请换一个。";
   }
   if (/customerId is required/i.test(message)) {
     return "请先选择客户。";
@@ -540,6 +596,8 @@ const modules = [
   { id: "costPayable", label: "成本应付", title: "成本应付" },
   { id: "closing", label: "结账报表", title: "结账与报表" },
   { id: "identity", label: "用户权限", title: "用户、角色与审计" },
+  { id: "superAdmins", label: "超级管理员", title: "超级管理员" },
+  { id: "tenants", label: "租户列表", title: "租户列表" },
   { id: "activation", label: "正式启用", title: "正式启用路径" },
 ] as const;
 
@@ -559,7 +617,7 @@ const navItems: Array<
   {
     kind: "group",
     label: "租户设置",
-    children: ["identity", "activation"],
+    children: ["identity", "superAdmins", "tenants", "activation"],
   },
 ];
 
@@ -602,6 +660,14 @@ const paymentRecipientPlatformText: Record<PaymentRecipientPlatform, string> = {
 };
 
 const ownerDelegatedRoleCodes = ["business_owner", "finance"];
+const tenantAdminDelegatedRoleCodes = ["owner", "business_owner", "finance"];
+const platformModuleIds: ModuleId[] = ["superAdmins", "tenants"];
+const tenantManagementRoleOptions = [
+  { code: "admin", name: "租户管理员" },
+  { code: "owner", name: "总负责人" },
+  { code: "business_owner", name: "业务负责人" },
+  { code: "finance", name: "财务" },
+];
 
 const taxpayerTypeText: Record<TaxpayerType, string> = {
   SMALL_SCALE: "小规模纳税人",
@@ -638,6 +704,8 @@ function emptyConsoleData(): ConsoleData {
     paymentRequests: [],
     payments: [],
     users: [],
+    superAdmins: [],
+    tenants: [],
     roles: [],
     auditLogs: [],
     profits: [],
@@ -871,6 +939,24 @@ function amountInput(value: number) {
   return Math.max(0, value).toFixed(2);
 }
 
+function messageTone(message: string) {
+  return /失败|错误|不能|缺少|请先|已过期|不一致|不正确|无效|不能为空|格式不正确|不存在|重复|不符合要求|failed|error|forbidden|unauthorized|required|invalid|not found|conflict|expired/i.test(
+    message,
+  )
+    ? "danger"
+    : "info";
+}
+
+function creatableRoleCodesFor(userRoles: string[]) {
+  if (userRoles.includes("admin")) {
+    return tenantAdminDelegatedRoleCodes;
+  }
+  if (userRoles.includes("owner")) {
+    return ownerDelegatedRoleCodes;
+  }
+  return [];
+}
+
 async function responseMessage(response: Response) {
   const contentType = response.headers.get("content-type") ?? "";
 
@@ -897,7 +983,7 @@ export default function Home() {
   const [active, setActive] = useState<ModuleId>("dashboard");
   const [expandedNavGroups, setExpandedNavGroups] = useState<
     Record<string, boolean>
-  >({});
+  >({ 租户设置: true });
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [signingEntities, setSigningEntities] = useState<SigningEntity[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -912,6 +998,8 @@ export default function Home() {
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [users, setUsers] = useState<ConsoleUser[]>([]);
+  const [superAdmins, setSuperAdmins] = useState<ConsoleUser[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [profits, setProfits] = useState<ProfitRow[]>([]);
@@ -1012,6 +1100,36 @@ export default function Home() {
   const [newUserRoleCode, setNewUserRoleCode] = useState("");
   const [newUserIsActive, setNewUserIsActive] = useState(true);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [superAdminDialogOpen, setSuperAdminDialogOpen] = useState(false);
+  const [editingSuperAdminId, setEditingSuperAdminId] = useState<string | null>(
+    null,
+  );
+  const [superAdminName, setSuperAdminName] = useState("");
+  const [superAdminPhone, setSuperAdminPhone] = useState("");
+  const [superAdminPassword, setSuperAdminPassword] = useState("");
+  const [superAdminConfirmPassword, setSuperAdminConfirmPassword] =
+    useState("");
+  const [superAdminIsActive, setSuperAdminIsActive] = useState(true);
+  const [tenantDialogOpen, setTenantDialogOpen] = useState(false);
+  const [editingTenantId, setEditingTenantId] = useState<string | null>(null);
+  const [tenantName, setTenantName] = useState("");
+  const [tenantAdminName, setTenantAdminName] = useState("");
+  const [tenantAdminPhone, setTenantAdminPhone] = useState("");
+  const [tenantAdminPassword, setTenantAdminPassword] = useState("");
+  const [tenantAdminConfirmPassword, setTenantAdminConfirmPassword] =
+    useState("");
+  const [tenantUserDialogOpen, setTenantUserDialogOpen] = useState(false);
+  const [editingTenantUser, setEditingTenantUser] = useState<{
+    tenantId: string;
+    user: ConsoleUser;
+  } | null>(null);
+  const [tenantUserName, setTenantUserName] = useState("");
+  const [tenantUserPhone, setTenantUserPhone] = useState("");
+  const [tenantUserPassword, setTenantUserPassword] = useState("");
+  const [tenantUserConfirmPassword, setTenantUserConfirmPassword] =
+    useState("");
+  const [tenantUserRoleCode, setTenantUserRoleCode] = useState("owner");
+  const [tenantUserIsActive, setTenantUserIsActive] = useState(true);
 
   const selectedBill = bills.find((bill) => bill.id === selectedBillId);
   const selectedPayable = payables.find(
@@ -1036,19 +1154,43 @@ export default function Home() {
     (recipient) => recipient.id === editingRecipientId,
   );
   const editingConsoleUser = users.find((item) => item.id === editingUserId);
+  const editingSuperAdmin = superAdmins.find(
+    (item) => item.id === editingSuperAdminId,
+  );
+  const editingTenant = tenants.find((item) => item.id === editingTenantId);
   const activeModule = getModuleMeta(active);
   const isLoggedIn = Boolean(token && user);
+  const userRoleCodes = user?.roles ?? [];
+  const isSuperAdmin = userRoleCodes.includes("super_admin");
+  const isPlatformModule = platformModuleIds.includes(active);
   const hasPermission = (...permissions: string[]) =>
     permissions.length === 0 ||
     (user?.permissions.some((permission) => permissions.includes(permission)) ??
       false);
-  const userRoleCodes = user?.roles ?? [];
-  const creatableRoles = roles.filter(
-    (role) =>
-      userRoleCodes.includes("admin") ||
-      (userRoleCodes.includes("owner") &&
-        ownerDelegatedRoleCodes.includes(role.code)),
+  const tenantRoleOptions = roles.filter((role) =>
+    tenantAdminDelegatedRoleCodes.includes(role.code),
   );
+  const creatableRoleCodes = creatableRoleCodesFor(userRoleCodes);
+  const creatableRoles = roles.filter((role) =>
+    creatableRoleCodes.includes(role.code),
+  );
+  const currentMessageTone = messageTone(message);
+  const visibleNavItems = navItems
+    .map((item) => {
+      if (item.kind === "module") {
+        if (isSuperAdmin) {
+          return platformModuleIds.includes(item.id) ? item : null;
+        }
+        return platformModuleIds.includes(item.id) ? null : item;
+      }
+      const children = item.children.filter((childId) =>
+        isSuperAdmin
+          ? platformModuleIds.includes(childId)
+          : !platformModuleIds.includes(childId),
+      ) as [ModuleId, ...ModuleId[]];
+      return children.length > 0 ? { ...item, children } : null;
+    })
+    .filter((item): item is (typeof navItems)[number] => Boolean(item));
   const actionBlockReason = (...permissions: string[]) => {
     if (!isLoggedIn) {
       return loginRequiredMessage;
@@ -1074,6 +1216,8 @@ export default function Home() {
     setPaymentRequests(data.paymentRequests);
     setPayments(data.payments);
     setUsers(data.users);
+    setSuperAdmins(data.superAdmins);
+    setTenants(data.tenants);
     setRoles(data.roles);
     setAuditLogs(data.auditLogs);
     setProfits(data.profits);
@@ -1108,9 +1252,13 @@ export default function Home() {
         : (data.paymentRecipients[0]?.id ?? ""),
     );
     setNewUserRoleCode((current) =>
-      data.roles.some((role) => role.code === current)
+      data.roles.some(
+        (role) =>
+          role.code === current && creatableRoleCodes.includes(role.code),
+      )
         ? current
-        : (data.roles[0]?.code ?? "business_owner"),
+        : (data.roles.find((role) => creatableRoleCodes.includes(role.code))
+            ?.code ?? "business_owner"),
     );
   }
 
@@ -1132,6 +1280,22 @@ export default function Home() {
         ),
     );
   }, []);
+
+  useEffect(() => {
+    const roleCodes = user?.roles ?? [];
+    if (
+      roleCodes.includes("super_admin") &&
+      !platformModuleIds.includes(active)
+    ) {
+      setActive("superAdmins");
+    }
+    if (
+      !roleCodes.includes("super_admin") &&
+      platformModuleIds.includes(active)
+    ) {
+      setActive("dashboard");
+    }
+  }, [active, user]);
 
   function resetSession(message = authExpiredMessage) {
     setToken("");
@@ -1222,6 +1386,8 @@ export default function Home() {
       nextPayments,
       nextUsers,
       nextRoles,
+      nextSuperAdmins,
+      nextTenants,
       nextAuditLogs,
       nextProfits,
     ] = await Promise.all([
@@ -1292,6 +1458,16 @@ export default function Home() {
         emptyPage<ConsoleUser>(),
       ),
       fetchIf<Role[]>(can("user.manage"), "/identity/roles", []),
+      fetchIf<ConsoleUser[] | PaginatedResponse<ConsoleUser>>(
+        can("tenant.manage"),
+        "/super-admins?pageSize=100",
+        emptyPage<ConsoleUser>(),
+      ),
+      fetchIf<Tenant[] | PaginatedResponse<Tenant>>(
+        can("tenant.manage"),
+        "/tenants?pageSize=100",
+        emptyPage<Tenant>(),
+      ),
       fetchIf<AuditLog[] | PaginatedResponse<AuditLog>>(
         can("audit.view"),
         "/audit-logs?pageSize=30",
@@ -1318,6 +1494,8 @@ export default function Home() {
       payments: listItems(nextPayments),
       users: listItems(nextUsers),
       roles: nextRoles,
+      superAdmins: listItems(nextSuperAdmins),
+      tenants: listItems(nextTenants),
       auditLogs: listItems(nextAuditLogs),
       profits: nextProfits,
     });
@@ -1484,12 +1662,21 @@ export default function Home() {
       setMessage(`编辑内部用户失败：${blockedReason}`);
       return;
     }
+    const isSelfEdit = item.id === user?.id;
     const roleCodes = item.roles.map((role) => role.code);
     const canManageUserRoles =
-      userRoleCodes.includes("admin") ||
+      isSelfEdit ||
+      (userRoleCodes.includes("admin") &&
+        roleCodes.every((roleCode) =>
+          tenantAdminDelegatedRoleCodes.includes(roleCode),
+        )) ||
       roleCodes.every((roleCode) => ownerDelegatedRoleCodes.includes(roleCode));
     if (!canManageUserRoles) {
-      setMessage("编辑内部用户失败：总负责人只能管理业务负责人和财务角色。");
+      setMessage(
+        userRoleCodes.includes("admin")
+          ? "编辑内部用户失败：租户管理员只能管理总负责人、业务负责人和财务角色。"
+          : "编辑内部用户失败：总负责人只能管理业务负责人和财务角色。",
+      );
       return;
     }
 
@@ -1820,6 +2007,7 @@ export default function Home() {
   function createConsoleUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const isEditing = Boolean(editingUserId);
+    const isEditingSelf = Boolean(editingUserId && editingUserId === user?.id);
     if (!newUserEmail.trim() || !newUserName.trim()) {
       setMessage("保存用户失败：邮箱和姓名不能为空。");
       return;
@@ -1840,8 +2028,9 @@ export default function Home() {
         const payload = {
           email: newUserEmail,
           name: newUserName,
-          roleCodes: [newUserRoleCode],
-          isActive: newUserIsActive,
+          ...(isEditingSelf
+            ? {}
+            : { roleCodes: [newUserRoleCode], isActive: newUserIsActive }),
           ...(newUserPassword.trim() ? { password: newUserPassword } : {}),
         };
         const result = await request(
@@ -1874,6 +2063,287 @@ export default function Home() {
         method: "PATCH",
         body: JSON.stringify({ permissionCodes: nextCodes }),
       }),
+    );
+  }
+
+  function resetSuperAdminForm() {
+    setEditingSuperAdminId(null);
+    setSuperAdminName("");
+    setSuperAdminPhone("");
+    setSuperAdminPassword("");
+    setSuperAdminConfirmPassword("");
+    setSuperAdminIsActive(true);
+  }
+
+  function openCreateSuperAdminDialog() {
+    const blockedReason = actionBlockReason("tenant.manage");
+    if (blockedReason) {
+      setMessage(`新增超级管理员失败：${blockedReason}`);
+      return;
+    }
+    resetSuperAdminForm();
+    setSuperAdminDialogOpen(true);
+  }
+
+  function openEditSuperAdminDialog(item: ConsoleUser) {
+    const blockedReason = actionBlockReason("tenant.manage");
+    if (blockedReason) {
+      setMessage(`编辑超级管理员失败：${blockedReason}`);
+      return;
+    }
+    setEditingSuperAdminId(item.id);
+    setSuperAdminName(item.name);
+    setSuperAdminPhone(item.phone ?? "");
+    setSuperAdminPassword("");
+    setSuperAdminConfirmPassword("");
+    setSuperAdminIsActive(item.isActive);
+    setSuperAdminDialogOpen(true);
+  }
+
+  function closeSuperAdminDialog() {
+    setSuperAdminDialogOpen(false);
+    resetSuperAdminForm();
+  }
+
+  function saveSuperAdmin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const isEditing = Boolean(editingSuperAdminId);
+    if (!superAdminName.trim() || !superAdminPhone.trim()) {
+      setMessage("保存超级管理员失败：昵称和手机号不能为空。");
+      return;
+    }
+    if (!isEditing && !superAdminPassword.trim()) {
+      setMessage("新增超级管理员失败：密码不能为空。");
+      return;
+    }
+    if (superAdminPassword || superAdminConfirmPassword) {
+      if (superAdminPassword !== superAdminConfirmPassword) {
+        setMessage("保存超级管理员失败：两次密码输入不一致。");
+        return;
+      }
+    }
+
+    void submitAction(
+      isEditing ? "编辑超级管理员" : "新增超级管理员",
+      ["tenant.manage"],
+      async () => {
+        const payload = {
+          name: superAdminName,
+          phone: superAdminPhone,
+          isActive: superAdminIsActive,
+          ...(superAdminPassword
+            ? {
+                password: superAdminPassword,
+                confirmPassword: superAdminConfirmPassword,
+              }
+            : {}),
+        };
+        const result = await request(
+          isEditing ? `/super-admins/${editingSuperAdminId}` : "/super-admins",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            body: JSON.stringify(payload),
+          },
+        );
+        closeSuperAdminDialog();
+        return result;
+      },
+    );
+  }
+
+  function deleteSuperAdmin(item: ConsoleUser) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除超级管理员 ${item.name}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除超级管理员", ["tenant.manage"], () =>
+      request(`/super-admins/${item.id}`, { method: "DELETE" }),
+    );
+  }
+
+  function resetTenantForm() {
+    setEditingTenantId(null);
+    setTenantName("");
+    setTenantAdminName("");
+    setTenantAdminPhone("");
+    setTenantAdminPassword("");
+    setTenantAdminConfirmPassword("");
+  }
+
+  function openCreateTenantDialog() {
+    const blockedReason = actionBlockReason("tenant.manage");
+    if (blockedReason) {
+      setMessage(`新建租户失败：${blockedReason}`);
+      return;
+    }
+    resetTenantForm();
+    setTenantDialogOpen(true);
+  }
+
+  function openEditTenantDialog(item: Tenant) {
+    const blockedReason = actionBlockReason("tenant.manage");
+    if (blockedReason) {
+      setMessage(`编辑租户失败：${blockedReason}`);
+      return;
+    }
+    setEditingTenantId(item.id);
+    setTenantName(item.name);
+    setTenantAdminName("");
+    setTenantAdminPhone("");
+    setTenantAdminPassword("");
+    setTenantAdminConfirmPassword("");
+    setTenantDialogOpen(true);
+  }
+
+  function closeTenantDialog() {
+    setTenantDialogOpen(false);
+    resetTenantForm();
+  }
+
+  function saveTenant(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const isEditing = Boolean(editingTenantId);
+    if (!tenantName.trim()) {
+      setMessage("保存租户失败：租户名称不能为空。");
+      return;
+    }
+    if (!isEditing) {
+      if (
+        !tenantAdminName.trim() ||
+        !tenantAdminPhone.trim() ||
+        !tenantAdminPassword.trim() ||
+        !tenantAdminConfirmPassword.trim()
+      ) {
+        setMessage("新建租户失败：管理员昵称、手机号、密码均为必填。");
+        return;
+      }
+      if (tenantAdminPassword !== tenantAdminConfirmPassword) {
+        setMessage("新建租户失败：两次密码输入不一致。");
+        return;
+      }
+    }
+
+    void submitAction(
+      isEditing ? "编辑租户" : "新建租户",
+      ["tenant.manage"],
+      async () => {
+        const payload = isEditing
+          ? { tenantName }
+          : {
+              tenantName,
+              adminName: tenantAdminName,
+              phone: tenantAdminPhone,
+              password: tenantAdminPassword,
+              confirmPassword: tenantAdminConfirmPassword,
+            };
+        const result = await request(
+          isEditing ? `/tenants/${editingTenantId}` : "/tenants",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            body: JSON.stringify(payload),
+          },
+        );
+        closeTenantDialog();
+        return result;
+      },
+    );
+  }
+
+  function deleteTenant(item: Tenant) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除租户 ${item.name}？该租户账号将被停用。`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除租户", ["tenant.manage"], () =>
+      request(`/tenants/${item.id}`, { method: "DELETE" }),
+    );
+  }
+
+  function openEditTenantUserDialog(tenantId: string, item: ConsoleUser) {
+    const blockedReason = actionBlockReason("tenant.manage");
+    if (blockedReason) {
+      setMessage(`编辑租户用户失败：${blockedReason}`);
+      return;
+    }
+    setEditingTenantUser({ tenantId, user: item });
+    setTenantUserName(item.name);
+    setTenantUserPhone(item.phone ?? "");
+    setTenantUserPassword("");
+    setTenantUserConfirmPassword("");
+    setTenantUserRoleCode(item.roles[0]?.code ?? "owner");
+    setTenantUserIsActive(item.isActive);
+    setTenantUserDialogOpen(true);
+  }
+
+  function closeTenantUserDialog() {
+    setTenantUserDialogOpen(false);
+    setEditingTenantUser(null);
+    setTenantUserName("");
+    setTenantUserPhone("");
+    setTenantUserPassword("");
+    setTenantUserConfirmPassword("");
+    setTenantUserRoleCode("owner");
+    setTenantUserIsActive(true);
+  }
+
+  function saveTenantUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingTenantUser) {
+      setMessage("编辑租户用户失败：请先选择用户。");
+      return;
+    }
+    if (!tenantUserName.trim() || !tenantUserPhone.trim()) {
+      setMessage("编辑租户用户失败：昵称和手机号不能为空。");
+      return;
+    }
+    if (tenantUserPassword || tenantUserConfirmPassword) {
+      if (tenantUserPassword !== tenantUserConfirmPassword) {
+        setMessage("编辑租户用户失败：两次密码输入不一致。");
+        return;
+      }
+    }
+
+    void submitAction("编辑租户用户", ["tenant.manage"], async () => {
+      const payload = {
+        name: tenantUserName,
+        phone: tenantUserPhone,
+        roleCodes: [tenantUserRoleCode],
+        isActive: tenantUserIsActive,
+        ...(tenantUserPassword
+          ? {
+              password: tenantUserPassword,
+              confirmPassword: tenantUserConfirmPassword,
+            }
+          : {}),
+      };
+      const result = await request(
+        `/tenants/${editingTenantUser.tenantId}/users/${editingTenantUser.user.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        },
+      );
+      closeTenantUserDialog();
+      return result;
+    });
+  }
+
+  function deleteTenantUser(tenantId: string, item: ConsoleUser) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除租户用户 ${item.name}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除租户用户", ["tenant.manage"], () =>
+      request(`/tenants/${tenantId}/users/${item.id}`, { method: "DELETE" }),
     );
   }
 
@@ -2469,7 +2939,7 @@ export default function Home() {
           <span>服务型业务 ERP</span>
         </div>
         <nav className="nav" aria-label="主导航">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             if (item.kind === "group") {
               const isGroupActive = item.children.includes(active);
               const isGroupExpanded = expandedNavGroups[item.label] ?? false;
@@ -2530,15 +3000,34 @@ export default function Home() {
         </nav>
         <div className="session">
           <span>{user?.name ?? "未登录"}</span>
-          <small>{message}</small>
+          <small>
+            {isSuperAdmin
+              ? "平台超级管理员"
+              : isLoggedIn
+                ? "正式系统已登录"
+                : "请先登录正式系统"}
+          </small>
         </div>
       </aside>
 
       <main className="main">
+        {message ? (
+          <div
+            className="global-toast"
+            data-tone={currentMessageTone}
+            role={currentMessageTone === "danger" ? "alert" : "status"}
+          >
+            {message}
+          </div>
+        ) : null}
         <header className="topbar">
           <div>
             <h1>{activeModule.title}</h1>
-            <p>{periodMonth} · 正式 API 模式</p>
+            <p>
+              {isPlatformModule
+                ? "平台多租户管理"
+                : `${periodMonth} · 正式 API 模式`}
+            </p>
           </div>
           <div className="topbar-actions">
             <div className="toolbar">
@@ -2551,7 +3040,9 @@ export default function Home() {
                 onClick={() =>
                   void refresh().catch((error: unknown) =>
                     setMessage(
-                      error instanceof Error ? error.message : "刷新失败",
+                      error instanceof Error
+                        ? `刷新失败：${translateErrorMessage(error.message)}`
+                        : "刷新失败",
                     ),
                   )
                 }
@@ -2608,10 +3099,11 @@ export default function Home() {
                 onSubmit={(event) => void login(event)}
               >
                 <label>
-                  邮箱
+                  账号
                   <input
-                    autoComplete="email"
+                    autoComplete="username"
                     onChange={(event) => setEmail(event.target.value)}
+                    placeholder="邮箱或手机号"
                     value={email}
                   />
                 </label>
@@ -2668,6 +3160,7 @@ export default function Home() {
             closeUserDialog={closeUserDialog}
             createConsoleUser={createConsoleUser}
             creatableRoles={creatableRoles}
+            currentUserId={user?.id ?? ""}
             disabledReason={actionBlockReason("user.manage")}
             editingUser={editingConsoleUser}
             newUserEmail={newUserEmail}
@@ -2687,6 +3180,73 @@ export default function Home() {
             userRoles={user?.roles ?? []}
             userDialogOpen={userDialogOpen}
             users={users}
+          />
+        ) : null}
+
+        {active === "superAdmins" ? (
+          <SuperAdminsModule
+            closeSuperAdminDialog={closeSuperAdminDialog}
+            disabledReason={actionBlockReason("tenant.manage")}
+            editingSuperAdmin={editingSuperAdmin}
+            deleteSuperAdmin={deleteSuperAdmin}
+            openCreateSuperAdminDialog={openCreateSuperAdminDialog}
+            openEditSuperAdminDialog={openEditSuperAdminDialog}
+            saveSuperAdmin={saveSuperAdmin}
+            setSuperAdminConfirmPassword={setSuperAdminConfirmPassword}
+            setSuperAdminIsActive={setSuperAdminIsActive}
+            setSuperAdminName={setSuperAdminName}
+            setSuperAdminPassword={setSuperAdminPassword}
+            setSuperAdminPhone={setSuperAdminPhone}
+            superAdminConfirmPassword={superAdminConfirmPassword}
+            superAdminDialogOpen={superAdminDialogOpen}
+            superAdminIsActive={superAdminIsActive}
+            superAdminName={superAdminName}
+            superAdminPassword={superAdminPassword}
+            superAdminPhone={superAdminPhone}
+            superAdmins={superAdmins}
+          />
+        ) : null}
+
+        {active === "tenants" ? (
+          <TenantsModule
+            closeTenantDialog={closeTenantDialog}
+            closeTenantUserDialog={closeTenantUserDialog}
+            deleteTenant={deleteTenant}
+            deleteTenantUser={deleteTenantUser}
+            disabledReason={actionBlockReason("tenant.manage")}
+            editingTenant={editingTenant}
+            editingTenantUser={editingTenantUser}
+            openCreateTenantDialog={openCreateTenantDialog}
+            openEditTenantDialog={openEditTenantDialog}
+            openEditTenantUserDialog={openEditTenantUserDialog}
+            roleOptions={tenantManagementRoleOptions}
+            saveTenant={saveTenant}
+            saveTenantUser={saveTenantUser}
+            setTenantAdminConfirmPassword={setTenantAdminConfirmPassword}
+            setTenantAdminName={setTenantAdminName}
+            setTenantAdminPassword={setTenantAdminPassword}
+            setTenantAdminPhone={setTenantAdminPhone}
+            setTenantName={setTenantName}
+            setTenantUserConfirmPassword={setTenantUserConfirmPassword}
+            setTenantUserIsActive={setTenantUserIsActive}
+            setTenantUserName={setTenantUserName}
+            setTenantUserPassword={setTenantUserPassword}
+            setTenantUserPhone={setTenantUserPhone}
+            setTenantUserRoleCode={setTenantUserRoleCode}
+            tenantAdminConfirmPassword={tenantAdminConfirmPassword}
+            tenantAdminName={tenantAdminName}
+            tenantAdminPassword={tenantAdminPassword}
+            tenantAdminPhone={tenantAdminPhone}
+            tenantDialogOpen={tenantDialogOpen}
+            tenantName={tenantName}
+            tenants={tenants}
+            tenantUserConfirmPassword={tenantUserConfirmPassword}
+            tenantUserDialogOpen={tenantUserDialogOpen}
+            tenantUserIsActive={tenantUserIsActive}
+            tenantUserName={tenantUserName}
+            tenantUserPassword={tenantUserPassword}
+            tenantUserPhone={tenantUserPhone}
+            tenantUserRoleCode={tenantUserRoleCode}
           />
         ) : null}
 
@@ -3471,11 +4031,570 @@ function ActivationModule({ apiBase }: { apiBase: string }) {
   );
 }
 
+function SuperAdminsModule({
+  closeSuperAdminDialog,
+  deleteSuperAdmin,
+  disabledReason,
+  editingSuperAdmin,
+  openCreateSuperAdminDialog,
+  openEditSuperAdminDialog,
+  saveSuperAdmin,
+  setSuperAdminConfirmPassword,
+  setSuperAdminIsActive,
+  setSuperAdminName,
+  setSuperAdminPassword,
+  setSuperAdminPhone,
+  superAdminConfirmPassword,
+  superAdminDialogOpen,
+  superAdminIsActive,
+  superAdminName,
+  superAdminPassword,
+  superAdminPhone,
+  superAdmins,
+}: {
+  closeSuperAdminDialog: () => void;
+  deleteSuperAdmin: (item: ConsoleUser) => void;
+  disabledReason: string;
+  editingSuperAdmin?: ConsoleUser;
+  openCreateSuperAdminDialog: () => void;
+  openEditSuperAdminDialog: (item: ConsoleUser) => void;
+  saveSuperAdmin: (event: FormEvent<HTMLFormElement>) => void;
+  setSuperAdminConfirmPassword: (value: string) => void;
+  setSuperAdminIsActive: (value: boolean) => void;
+  setSuperAdminName: (value: string) => void;
+  setSuperAdminPassword: (value: string) => void;
+  setSuperAdminPhone: (value: string) => void;
+  superAdminConfirmPassword: string;
+  superAdminDialogOpen: boolean;
+  superAdminIsActive: boolean;
+  superAdminName: string;
+  superAdminPassword: string;
+  superAdminPhone: string;
+  superAdmins: ConsoleUser[];
+}) {
+  return (
+    <section className="workspace">
+      <TablePanel
+        action={
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            onClick={openCreateSuperAdminDialog}
+            type="button"
+          >
+            新增超级管理员
+          </button>
+        }
+        count={`${superAdmins.length} 个`}
+        title="超级管理员列表"
+      >
+        {disabledReason ? (
+          <div className="inline-notice">{disabledReason}</div>
+        ) : null}
+        <table>
+          <thead>
+            <tr>
+              <th>昵称</th>
+              <th>手机号</th>
+              <th>状态</th>
+              <th>创建时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {superAdmins.map((item) => (
+              <tr key={item.id}>
+                <td>{item.name}</td>
+                <td>{item.phone ?? "-"}</td>
+                <td>
+                  <span className="status">
+                    {item.isActive ? "启用" : "停用"}
+                  </span>
+                </td>
+                <td>{dateText(item.createdAt)}</td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={() => openEditSuperAdminDialog(item)}
+                      type="button"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={() => deleteSuperAdmin(item)}
+                      type="button"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TablePanel>
+
+      {superAdminDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeSuperAdminDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>{editingSuperAdmin ? "编辑超级管理员" : "新增超级管理员"}</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeSuperAdminDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={saveSuperAdmin}>
+              <label>
+                昵称
+                <input
+                  onChange={(event) => setSuperAdminName(event.target.value)}
+                  value={superAdminName}
+                />
+              </label>
+              <label>
+                手机号
+                <input
+                  onChange={(event) => setSuperAdminPhone(event.target.value)}
+                  value={superAdminPhone}
+                />
+              </label>
+              <label>
+                {editingSuperAdmin ? "重置密码" : "密码"}
+                <input
+                  autoComplete="new-password"
+                  onChange={(event) =>
+                    setSuperAdminPassword(event.target.value)
+                  }
+                  placeholder={editingSuperAdmin ? "不填写则保持原密码" : ""}
+                  type="password"
+                  value={superAdminPassword}
+                />
+              </label>
+              <label>
+                确认密码
+                <input
+                  autoComplete="new-password"
+                  onChange={(event) =>
+                    setSuperAdminConfirmPassword(event.target.value)
+                  }
+                  type="password"
+                  value={superAdminConfirmPassword}
+                />
+              </label>
+              {editingSuperAdmin ? (
+                <label className="checkbox-row">
+                  <input
+                    checked={superAdminIsActive}
+                    onChange={(event) =>
+                      setSuperAdminIsActive(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  启用账号
+                </label>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeSuperAdminDialog} type="button">
+                  取消
+                </button>
+                <button className="primary" type="submit">
+                  {editingSuperAdmin ? "保存修改" : "创建超管"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function TenantsModule({
+  closeTenantDialog,
+  closeTenantUserDialog,
+  deleteTenant,
+  deleteTenantUser,
+  disabledReason,
+  editingTenant,
+  editingTenantUser,
+  openCreateTenantDialog,
+  openEditTenantDialog,
+  openEditTenantUserDialog,
+  roleOptions,
+  saveTenant,
+  saveTenantUser,
+  setTenantAdminConfirmPassword,
+  setTenantAdminName,
+  setTenantAdminPassword,
+  setTenantAdminPhone,
+  setTenantName,
+  setTenantUserConfirmPassword,
+  setTenantUserIsActive,
+  setTenantUserName,
+  setTenantUserPassword,
+  setTenantUserPhone,
+  setTenantUserRoleCode,
+  tenantAdminConfirmPassword,
+  tenantAdminName,
+  tenantAdminPassword,
+  tenantAdminPhone,
+  tenantDialogOpen,
+  tenantName,
+  tenants,
+  tenantUserConfirmPassword,
+  tenantUserDialogOpen,
+  tenantUserIsActive,
+  tenantUserName,
+  tenantUserPassword,
+  tenantUserPhone,
+  tenantUserRoleCode,
+}: {
+  closeTenantDialog: () => void;
+  closeTenantUserDialog: () => void;
+  deleteTenant: (item: Tenant) => void;
+  deleteTenantUser: (tenantId: string, item: ConsoleUser) => void;
+  disabledReason: string;
+  editingTenant?: Tenant;
+  editingTenantUser: { tenantId: string; user: ConsoleUser } | null;
+  openCreateTenantDialog: () => void;
+  openEditTenantDialog: (item: Tenant) => void;
+  openEditTenantUserDialog: (tenantId: string, item: ConsoleUser) => void;
+  roleOptions: Array<{ code: string; name: string }>;
+  saveTenant: (event: FormEvent<HTMLFormElement>) => void;
+  saveTenantUser: (event: FormEvent<HTMLFormElement>) => void;
+  setTenantAdminConfirmPassword: (value: string) => void;
+  setTenantAdminName: (value: string) => void;
+  setTenantAdminPassword: (value: string) => void;
+  setTenantAdminPhone: (value: string) => void;
+  setTenantName: (value: string) => void;
+  setTenantUserConfirmPassword: (value: string) => void;
+  setTenantUserIsActive: (value: boolean) => void;
+  setTenantUserName: (value: string) => void;
+  setTenantUserPassword: (value: string) => void;
+  setTenantUserPhone: (value: string) => void;
+  setTenantUserRoleCode: (value: string) => void;
+  tenantAdminConfirmPassword: string;
+  tenantAdminName: string;
+  tenantAdminPassword: string;
+  tenantAdminPhone: string;
+  tenantDialogOpen: boolean;
+  tenantName: string;
+  tenants: Tenant[];
+  tenantUserConfirmPassword: string;
+  tenantUserDialogOpen: boolean;
+  tenantUserIsActive: boolean;
+  tenantUserName: string;
+  tenantUserPassword: string;
+  tenantUserPhone: string;
+  tenantUserRoleCode: string;
+}) {
+  return (
+    <section className="workspace">
+      <TablePanel
+        action={
+          <button
+            className="primary"
+            disabled={Boolean(disabledReason)}
+            onClick={openCreateTenantDialog}
+            type="button"
+          >
+            新建租户
+          </button>
+        }
+        count={`${tenants.length} 个`}
+        title="租户列表"
+      >
+        {disabledReason ? (
+          <div className="inline-notice">{disabledReason}</div>
+        ) : null}
+        <table>
+          <thead>
+            <tr>
+              <th>租户名称</th>
+              <th>租户编码</th>
+              <th>用户信息</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tenants.map((tenant) => (
+              <tr key={tenant.id}>
+                <td>{tenant.name}</td>
+                <td>{tenant.code}</td>
+                <td className="wrap-cell">
+                  <div className="tenant-user-list">
+                    {tenant.users.length > 0 ? (
+                      tenant.users.map((item) => (
+                        <div className="tenant-user-row" key={item.id}>
+                          <span>
+                            {item.name} · {item.phone ?? "-"} ·{" "}
+                            {item.roles.map((role) => role.name).join("、") ||
+                              "-"}
+                          </span>
+                          <div className="row-actions">
+                            <button
+                              disabled={Boolean(disabledReason)}
+                              onClick={() =>
+                                openEditTenantUserDialog(tenant.id, item)
+                              }
+                              type="button"
+                            >
+                              编辑
+                            </button>
+                            <button
+                              disabled={Boolean(disabledReason)}
+                              onClick={() => deleteTenantUser(tenant.id, item)}
+                              type="button"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="empty-inline">暂无用户</span>
+                    )}
+                  </div>
+                </td>
+                <td>
+                  <span className="status">
+                    {tenant.isActive ? "启用" : "停用"}
+                  </span>
+                </td>
+                <td>
+                  <div className="row-actions">
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={() => openEditTenantDialog(tenant)}
+                      type="button"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={() => deleteTenant(tenant)}
+                      type="button"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TablePanel>
+
+      {tenantDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeTenantDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>{editingTenant ? "编辑租户" : "新建租户"}</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeTenantDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={saveTenant}>
+              <label>
+                租户名称
+                <input
+                  onChange={(event) => setTenantName(event.target.value)}
+                  value={tenantName}
+                />
+              </label>
+              {!editingTenant ? (
+                <>
+                  <label>
+                    管理员昵称
+                    <input
+                      onChange={(event) =>
+                        setTenantAdminName(event.target.value)
+                      }
+                      value={tenantAdminName}
+                    />
+                  </label>
+                  <label>
+                    手机号
+                    <input
+                      onChange={(event) =>
+                        setTenantAdminPhone(event.target.value)
+                      }
+                      value={tenantAdminPhone}
+                    />
+                  </label>
+                  <label>
+                    密码
+                    <input
+                      autoComplete="new-password"
+                      onChange={(event) =>
+                        setTenantAdminPassword(event.target.value)
+                      }
+                      type="password"
+                      value={tenantAdminPassword}
+                    />
+                  </label>
+                  <label>
+                    确认密码
+                    <input
+                      autoComplete="new-password"
+                      onChange={(event) =>
+                        setTenantAdminConfirmPassword(event.target.value)
+                      }
+                      type="password"
+                      value={tenantAdminConfirmPassword}
+                    />
+                  </label>
+                </>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeTenantDialog} type="button">
+                  取消
+                </button>
+                <button className="primary" type="submit">
+                  {editingTenant ? "保存修改" : "创建租户"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {tenantUserDialogOpen && editingTenantUser ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeTenantUserDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>编辑租户用户</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeTenantUserDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={saveTenantUser}>
+              <label>
+                昵称
+                <input
+                  onChange={(event) => setTenantUserName(event.target.value)}
+                  value={tenantUserName}
+                />
+              </label>
+              <label>
+                手机号
+                <input
+                  onChange={(event) => setTenantUserPhone(event.target.value)}
+                  value={tenantUserPhone}
+                />
+              </label>
+              <label>
+                角色
+                <select
+                  onChange={(event) =>
+                    setTenantUserRoleCode(event.target.value)
+                  }
+                  value={tenantUserRoleCode}
+                >
+                  {roleOptions.map((role) => (
+                    <option key={role.code} value={role.code}>
+                      {role.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                重置密码
+                <input
+                  autoComplete="new-password"
+                  onChange={(event) =>
+                    setTenantUserPassword(event.target.value)
+                  }
+                  placeholder="不填写则保持原密码"
+                  type="password"
+                  value={tenantUserPassword}
+                />
+              </label>
+              <label>
+                确认密码
+                <input
+                  autoComplete="new-password"
+                  onChange={(event) =>
+                    setTenantUserConfirmPassword(event.target.value)
+                  }
+                  type="password"
+                  value={tenantUserConfirmPassword}
+                />
+              </label>
+              <label className="checkbox-row">
+                <input
+                  checked={tenantUserIsActive}
+                  onChange={(event) =>
+                    setTenantUserIsActive(event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                启用账号
+              </label>
+              <div className="modal-actions">
+                <button onClick={closeTenantUserDialog} type="button">
+                  取消
+                </button>
+                <button className="primary" type="submit">
+                  保存修改
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function IdentityModule({
   auditLogs,
   closeUserDialog,
   createConsoleUser,
   creatableRoles,
+  currentUserId,
   disabledReason,
   editingUser,
   newUserEmail,
@@ -3500,6 +4619,7 @@ function IdentityModule({
   closeUserDialog: () => void;
   createConsoleUser: (event: FormEvent<HTMLFormElement>) => void;
   creatableRoles: Role[];
+  currentUserId: string;
   disabledReason: string;
   editingUser?: ConsoleUser;
   newUserEmail: string;
@@ -3527,11 +4647,19 @@ function IdentityModule({
   const isAdmin = userRoles.includes("admin");
   const isOwner = userRoles.includes("owner");
   const canEditRole = (role: Role) =>
-    isAdmin || (isOwner && ownerDelegatedRoleCodes.includes(role.code));
+    (isAdmin && tenantAdminDelegatedRoleCodes.includes(role.code)) ||
+    (isOwner && ownerDelegatedRoleCodes.includes(role.code));
   const canEditUser = (item: ConsoleUser) =>
-    isAdmin ||
+    item.id === currentUserId ||
+    (isAdmin &&
+      item.roles.every((role) =>
+        tenantAdminDelegatedRoleCodes.includes(role.code),
+      )) ||
     (isOwner &&
       item.roles.every((role) => ownerDelegatedRoleCodes.includes(role.code)));
+  const isEditingSelf = Boolean(
+    editingUser && editingUser.id === currentUserId,
+  );
 
   return (
     <section className="workspace">
@@ -3642,26 +4770,42 @@ function IdentityModule({
               </label>
               <label>
                 角色
-                <select
-                  onChange={(event) => setNewUserRoleCode(event.target.value)}
-                  value={newUserRoleCode}
-                >
-                  <option value="">选择角色</option>
-                  {creatableRoles.map((role) => (
-                    <option key={role.id} value={role.code}>
-                      {role.name}
-                    </option>
-                  ))}
-                </select>
+                {isEditingSelf ? (
+                  <input
+                    disabled
+                    value={
+                      editingUser?.roles.map((role) => role.name).join("、") ??
+                      "-"
+                    }
+                  />
+                ) : (
+                  <select
+                    onChange={(event) => setNewUserRoleCode(event.target.value)}
+                    value={newUserRoleCode}
+                  >
+                    <option value="">选择角色</option>
+                    {creatableRoles.map((role) => (
+                      <option key={role.id} value={role.code}>
+                        {role.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </label>
               <label className="checkbox-row">
                 <input
                   checked={newUserIsActive}
+                  disabled={isEditingSelf}
                   onChange={(event) => setNewUserIsActive(event.target.checked)}
                   type="checkbox"
                 />
                 启用账号
               </label>
+              {isEditingSelf ? (
+                <small className="form-note">
+                  当前账号只能修改邮箱、姓名和密码，角色与启用状态保持不变。
+                </small>
+              ) : null}
               {disabledReason ? (
                 <small className="form-note">{disabledReason}</small>
               ) : null}

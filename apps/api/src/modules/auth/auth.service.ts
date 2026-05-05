@@ -39,11 +39,14 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto): Promise<LoginResponse> {
-    const email = dto.email.trim().toLowerCase();
-    this.assertLoginAllowed(email);
+    const account = dto.email.trim();
+    const lookup = account.toLowerCase();
+    this.assertLoginAllowed(lookup);
 
-    const user = await this.prisma.user.findUnique({
-      where: { email },
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email: lookup }, { phone: account }],
+      },
       include: {
         userRoles: {
           include: {
@@ -62,7 +65,7 @@ export class AuthService {
     });
 
     if (!user?.passwordHash || !user.isActive) {
-      this.recordFailedLogin(email);
+      this.recordFailedLogin(lookup);
       throw new UnauthorizedException("Invalid email or password.");
     }
 
@@ -72,11 +75,11 @@ export class AuthService {
     );
 
     if (!passwordMatches) {
-      this.recordFailedLogin(email);
+      this.recordFailedLogin(lookup);
       throw new UnauthorizedException("Invalid email or password.");
     }
 
-    this.loginFailures.delete(email);
+    this.loginFailures.delete(lookup);
 
     const roles = user.userRoles.map(
       (userRole) => userRole.role.code as RoleCode,
@@ -96,6 +99,7 @@ export class AuthService {
       id: user.id,
       orgId: user.orgId,
       email: user.email,
+      phone: user.phone,
       name: user.name,
       roles,
       permissions,

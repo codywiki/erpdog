@@ -6,6 +6,7 @@ import { PERMISSION_CODES, ROLE_CODES } from "@erpdog/contracts";
 const prisma = new PrismaClient();
 
 const permissionNames: Record<string, string> = {
+  [PERMISSION_CODES.TENANT_MANAGE]: "管理租户和超级管理员",
   [PERMISSION_CODES.USER_MANAGE]: "管理用户和权限",
   [PERMISSION_CODES.CUSTOMER_READ_ALL]: "查看全部客户",
   [PERMISSION_CODES.CUSTOMER_READ_OWN]: "查看负责客户",
@@ -30,8 +31,10 @@ const permissionNames: Record<string, string> = {
 const roleDefinitions = [
   {
     code: ROLE_CODES.ADMIN,
-    name: "管理员",
-    permissions: Object.values(PERMISSION_CODES),
+    name: "租户管理员",
+    permissions: Object.values(PERMISSION_CODES).filter(
+      (code) => code !== PERMISSION_CODES.TENANT_MANAGE,
+    ),
   },
   {
     code: ROLE_CODES.OWNER,
@@ -88,6 +91,14 @@ const roleDefinitions = [
   },
 ];
 
+const platformRoleDefinitions = [
+  {
+    code: ROLE_CODES.SUPER_ADMIN,
+    name: "超级管理员",
+    permissions: [PERMISSION_CODES.TENANT_MANAGE],
+  },
+];
+
 const extraChargeCategories = [
   { code: "value-added", name: "增值服务", kind: ExtraChargeKind.VALUE_ADDED },
   {
@@ -108,10 +119,22 @@ const costCategories = [
 async function main() {
   const org = await prisma.organization.upsert({
     where: { code: "default" },
-    update: {},
+    update: { isPlatform: false },
     create: {
       code: "default",
       name: "默认组织",
+      isPlatform: false,
+    },
+  });
+
+  const platformOrg = await prisma.organization.upsert({
+    where: { code: "platform" },
+    update: { isPlatform: true, isActive: true },
+    create: {
+      code: "platform",
+      name: "平台管理",
+      isPlatform: true,
+      isActive: true,
     },
   });
 
@@ -142,6 +165,47 @@ async function main() {
       },
       create: {
         orgId: org.id,
+        code: roleDefinition.code,
+        name: roleDefinition.name,
+        isSystem: true,
+      },
+    });
+
+    for (const permissionCode of roleDefinition.permissions) {
+      const permission = await prisma.permission.findUniqueOrThrow({
+        where: { code: permissionCode },
+      });
+
+      await prisma.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: role.id,
+            permissionId: permission.id,
+          },
+        },
+        update: {},
+        create: {
+          roleId: role.id,
+          permissionId: permission.id,
+        },
+      });
+    }
+  }
+
+  for (const roleDefinition of platformRoleDefinitions) {
+    const role = await prisma.role.upsert({
+      where: {
+        orgId_code: {
+          orgId: platformOrg.id,
+          code: roleDefinition.code,
+        },
+      },
+      update: {
+        name: roleDefinition.name,
+        isSystem: true,
+      },
+      create: {
+        orgId: platformOrg.id,
         code: roleDefinition.code,
         name: roleDefinition.name,
         isSystem: true,
@@ -215,6 +279,54 @@ async function main() {
     },
   });
 
+  const superAdminPhone = process.env.SUPER_ADMIN_PHONE ?? "13800000000";
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD ?? "ChangeMe123!";
+  const superAdminName = process.env.SUPER_ADMIN_NAME ?? "超级管理员";
+  const superAdminEmail = `super-${superAdminPhone.replace(/\D/g, "")}@phone.erpdog.local`;
+  const superAdminPasswordHash = await bcrypt.hash(superAdminPassword, 12);
+
+  const superAdmin = await prisma.user.upsert({
+    where: { email: superAdminEmail },
+    update: {
+      name: superAdminName,
+      phone: superAdminPhone,
+      passwordHash: superAdminPasswordHash,
+      isActive: true,
+      orgId: platformOrg.id,
+    },
+    create: {
+      orgId: platformOrg.id,
+      email: superAdminEmail,
+      phone: superAdminPhone,
+      name: superAdminName,
+      passwordHash: superAdminPasswordHash,
+      isActive: true,
+    },
+  });
+
+  const superAdminRole = await prisma.role.findUniqueOrThrow({
+    where: {
+      orgId_code: {
+        orgId: platformOrg.id,
+        code: ROLE_CODES.SUPER_ADMIN,
+      },
+    },
+  });
+
+  await prisma.userRole.upsert({
+    where: {
+      userId_roleId: {
+        userId: superAdmin.id,
+        roleId: superAdminRole.id,
+      },
+    },
+    update: {},
+    create: {
+      userId: superAdmin.id,
+      roleId: superAdminRole.id,
+    },
+  });
+
   for (const category of extraChargeCategories) {
     await prisma.extraChargeCategory.upsert({
       where: {
@@ -259,7 +371,8 @@ async function main() {
     });
   }
 
-  console.info(`Seeded erpdog admin user: ${adminEmail}`);
+  console.info(`Seeded erpdog tenant admin user: ${adminEmail}`);
+  console.info(`Seeded erpdog super admin phone: ${superAdminPhone}`);
 }
 
 main()

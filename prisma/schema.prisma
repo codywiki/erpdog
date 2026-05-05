@@ -116,12 +116,13 @@ enum PeriodClosingStatus {
 }
 
 model Organization {
-  id        String   @id @default(uuid())
-  name      String
-  code      String   @unique
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id         String   @id @default(uuid())
+  name       String
+  code       String   @unique
+  isActive   Boolean  @default(true) @map("is_active")
+  isPlatform Boolean  @default(false) @map("is_platform")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   users                  User[]
   roles                  Role[]
@@ -152,6 +153,7 @@ model User {
   id           String    @id @default(uuid())
   orgId        String    @map("org_id")
   email        String    @unique
+  phone        String?   @unique
   name         String
   passwordHash String?   @map("password_hash")
   isActive     Boolean   @default(true) @map("is_active")
@@ -551,29 +553,29 @@ model BillingPeriod {
 }
 
 model Bill {
-  id               String     @id @default(uuid())
-  orgId            String     @map("org_id")
-  customerId       String     @map("customer_id")
-  contractId       String?    @map("contract_id")
-  billNo           String     @map("bill_no")
-  periodMonth      String     @map("period_month")
-  status           BillStatus @default(DRAFT)
-  currency         String     @default("CNY")
-  subtotal         Decimal    @default(0) @db.Decimal(18, 2)
-  adjustmentTotal  Decimal    @default(0) @map("adjustment_total") @db.Decimal(18, 2)
-  totalAmount      Decimal    @default(0) @map("total_amount") @db.Decimal(18, 2)
-  dueDate          DateTime?  @map("due_date")
-  approvalRequestedAt DateTime?  @map("approval_requested_at")
-  approvedAt       DateTime?  @map("approved_at")
-  approvedById     String?    @map("approved_by_id")
-  confirmedAt      DateTime?  @map("confirmed_at")
-  confirmedBy      String?    @map("confirmed_by")
-  confirmationNote String?    @map("confirmation_note")
-  evidenceAttachmentIds Json? @map("evidence_attachment_ids")
-  invoiceAttachmentIds Json?  @map("invoice_attachment_ids")
-  receiptAttachmentIds Json?  @map("receipt_attachment_ids")
-  createdAt        DateTime   @default(now()) @map("created_at")
-  updatedAt        DateTime   @updatedAt @map("updated_at")
+  id                    String     @id @default(uuid())
+  orgId                 String     @map("org_id")
+  customerId            String     @map("customer_id")
+  contractId            String?    @map("contract_id")
+  billNo                String     @map("bill_no")
+  periodMonth           String     @map("period_month")
+  status                BillStatus @default(DRAFT)
+  currency              String     @default("CNY")
+  subtotal              Decimal    @default(0) @db.Decimal(18, 2)
+  adjustmentTotal       Decimal    @default(0) @map("adjustment_total") @db.Decimal(18, 2)
+  totalAmount           Decimal    @default(0) @map("total_amount") @db.Decimal(18, 2)
+  dueDate               DateTime?  @map("due_date")
+  approvalRequestedAt   DateTime?  @map("approval_requested_at")
+  approvedAt            DateTime?  @map("approved_at")
+  approvedById          String?    @map("approved_by_id")
+  confirmedAt           DateTime?  @map("confirmed_at")
+  confirmedBy           String?    @map("confirmed_by")
+  confirmationNote      String?    @map("confirmation_note")
+  evidenceAttachmentIds Json?      @map("evidence_attachment_ids")
+  invoiceAttachmentIds  Json?      @map("invoice_attachment_ids")
+  receiptAttachmentIds  Json?      @map("receipt_attachment_ids")
+  createdAt             DateTime   @default(now()) @map("created_at")
+  updatedAt             DateTime   @updatedAt @map("updated_at")
 
   org                Organization        @relation(fields: [orgId], references: [id], onDelete: Restrict)
   customer           Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
@@ -635,16 +637,16 @@ model BillSettlement {
 
 model BillSettlementItem {
   id                  String   @id @default(uuid())
-  settlementId         String   @map("settlement_id")
-  customerContactName  String   @map("customer_contact_name")
-  projectName          String   @map("project_name")
-  periodMonth          String   @map("period_month")
-  cooperationModes     Json     @map("cooperation_modes")
-  otherModeNote        String?  @map("other_mode_note")
-  cooperationFee       Decimal  @map("cooperation_fee") @db.Decimal(18, 2)
-  serviceFee           Decimal  @map("service_fee") @db.Decimal(18, 2)
-  totalFee             Decimal  @map("total_fee") @db.Decimal(18, 2)
-  createdAt            DateTime @default(now()) @map("created_at")
+  settlementId        String   @map("settlement_id")
+  customerContactName String   @map("customer_contact_name")
+  projectName         String   @map("project_name")
+  periodMonth         String   @map("period_month")
+  cooperationModes    Json     @map("cooperation_modes")
+  otherModeNote       String?  @map("other_mode_note")
+  cooperationFee      Decimal  @map("cooperation_fee") @db.Decimal(18, 2)
+  serviceFee          Decimal  @map("service_fee") @db.Decimal(18, 2)
+  totalFee            Decimal  @map("total_fee") @db.Decimal(18, 2)
+  createdAt           DateTime @default(now()) @map("created_at")
 
   settlement BillSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
 
@@ -818,26 +820,26 @@ model CostEntry {
 }
 
 model Payable {
-  id                   String                    @id @default(uuid())
-  orgId                String                    @map("org_id")
-  customerId           String?                   @map("customer_id")
-  billId               String?                   @map("bill_id")
-  costEntryId          String?                   @map("cost_entry_id")
-  categoryId           String?                   @map("category_id")
-  paymentRecipientId   String?                   @map("payment_recipient_id")
-  vendorName           String                    @map("vendor_name")
-  receiptPlatform      PaymentRecipientPlatform  @default(PRIVATE_BANK) @map("receipt_platform")
-  receiptAccountName   String                    @default("") @map("receipt_account_name")
-  receiptAccountNo     String                    @default("") @map("receipt_account_no")
-  receiptBankBranch    String?                   @map("receipt_bank_branch")
-  periodMonth          String?                   @map("period_month")
-  amount               Decimal                   @db.Decimal(18, 2)
-  paidAmount           Decimal                   @default(0) @map("paid_amount") @db.Decimal(18, 2)
-  status               PayableStatus             @default(UNPAID)
-  dueDate              DateTime?                 @map("due_date")
-  remarks              String?
-  createdAt            DateTime                  @default(now()) @map("created_at")
-  updatedAt            DateTime                  @updatedAt @map("updated_at")
+  id                 String                   @id @default(uuid())
+  orgId              String                   @map("org_id")
+  customerId         String?                  @map("customer_id")
+  billId             String?                  @map("bill_id")
+  costEntryId        String?                  @map("cost_entry_id")
+  categoryId         String?                  @map("category_id")
+  paymentRecipientId String?                  @map("payment_recipient_id")
+  vendorName         String                   @map("vendor_name")
+  receiptPlatform    PaymentRecipientPlatform @default(PRIVATE_BANK) @map("receipt_platform")
+  receiptAccountName String                   @default("") @map("receipt_account_name")
+  receiptAccountNo   String                   @default("") @map("receipt_account_no")
+  receiptBankBranch  String?                  @map("receipt_bank_branch")
+  periodMonth        String?                  @map("period_month")
+  amount             Decimal                  @db.Decimal(18, 2)
+  paidAmount         Decimal                  @default(0) @map("paid_amount") @db.Decimal(18, 2)
+  status             PayableStatus            @default(UNPAID)
+  dueDate            DateTime?                @map("due_date")
+  remarks            String?
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
 
   org                 Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
   customer            Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -857,16 +859,16 @@ model Payable {
 }
 
 model PaymentRecipient {
-  id                String                   @id @default(uuid())
-  orgId             String                   @map("org_id")
-  name              String
-  platform          PaymentRecipientPlatform
-  accountName       String                   @map("account_name")
-  accountNo         String                   @map("account_no")
-  bankBranch        String?                  @map("bank_branch")
-  isActive          Boolean                  @default(true) @map("is_active")
-  createdAt         DateTime                 @default(now()) @map("created_at")
-  updatedAt         DateTime                 @updatedAt @map("updated_at")
+  id          String                   @id @default(uuid())
+  orgId       String                   @map("org_id")
+  name        String
+  platform    PaymentRecipientPlatform
+  accountName String                   @map("account_name")
+  accountNo   String                   @map("account_no")
+  bankBranch  String?                  @map("bank_branch")
+  isActive    Boolean                  @default(true) @map("is_active")
+  createdAt   DateTime                 @default(now()) @map("created_at")
+  updatedAt   DateTime                 @updatedAt @map("updated_at")
 
   org      Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
   payables Payable[]

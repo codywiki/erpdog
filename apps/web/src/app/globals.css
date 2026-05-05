@@ -195,6 +195,31 @@ label {
   padding: 22px;
 }
 
+.global-toast {
+  background: #f7fbf9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 36px rgba(24, 32, 29, 0.12);
+  color: var(--accent-strong);
+  font-size: 14px;
+  left: 50%;
+  line-height: 1.5;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 10px 14px;
+  position: fixed;
+  top: 18px;
+  transform: translateX(-50%);
+  width: max-content;
+  z-index: 80;
+}
+
+.global-toast[data-tone="danger"] {
+  background: #fff5f5;
+  border-color: #e3a4a4;
+  color: var(--red);
+  font-weight: 700;
+}
+
 .topbar {
   align-items: center;
   display: flex;
@@ -326,6 +351,30 @@ label {
 .row-actions {
   display: flex;
   gap: 8px;
+}
+
+.tenant-user-list {
+  display: grid;
+  gap: 8px;
+  min-width: 420px;
+}
+
+.tenant-user-row {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding-bottom: 8px;
+}
+
+.tenant-user-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.empty-inline {
+  color: var(--muted);
 }
 
 .metric-grid {

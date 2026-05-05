@@ -16,6 +16,7 @@ import { CustomersModule } from "./modules/customers/customers.module";
 import { FinanceModule } from "./modules/finance/finance.module";
 import { HealthModule } from "./modules/health/health.module";
 import { IdentityModule } from "./modules/identity/identity.module";
+import { PlatformModule } from "./modules/platform/platform.module";
 import { SigningEntitiesModule } from "./modules/signing-entities/signing-entities.module";
 
 @Module({
@@ -29,6 +30,7 @@ import { SigningEntitiesModule } from "./modules/signing-entities/signing-entiti
     PeriodsModule,
     HealthModule,
     AuthModule,
+    PlatformModule,
     IdentityModule,
     CustomersModule,
     SigningEntitiesModule,

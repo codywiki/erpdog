@@ -1,4 +1,5 @@
 export const ROLE_CODES = {
+  SUPER_ADMIN: "super_admin",
   ADMIN: "admin",
   OWNER: "owner",
   FINANCE: "finance",
@@ -8,6 +9,7 @@ export const ROLE_CODES = {
 export type RoleCode = (typeof ROLE_CODES)[keyof typeof ROLE_CODES];
 
 export const PERMISSION_CODES = {
+  TENANT_MANAGE: "tenant.manage",
   USER_MANAGE: "user.manage",
   CUSTOMER_READ_ALL: "customer.read_all",
   CUSTOMER_READ_OWN: "customer.read_own",
@@ -148,6 +150,7 @@ export type AuthenticatedUser = {
   id: string;
   orgId: string;
   email: string;
+  phone?: string | null;
   name: string;
   roles: RoleCode[];
   permissions: PermissionCode[];
