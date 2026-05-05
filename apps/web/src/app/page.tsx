@@ -793,6 +793,10 @@ function paymentRecipientAccountText(recipient?: PaymentRecipient | null) {
     .join(" / ");
 }
 
+function paymentRecipientOptionText(recipient: PaymentRecipient) {
+  return `${recipient.name} · ${paymentRecipientAccountText(recipient)}`;
+}
+
 function payableAccountText(payable: Payable) {
   return [
     payable.receiptPlatform
@@ -2768,10 +2772,15 @@ export default function Home() {
     }
     const nextBillId = selectedBillId || bills[0]?.id || "";
     setSelectedBillId(nextBillId);
-    setSelectedPaymentRecipientId(
-      selectedPaymentRecipientId || paymentRecipients[0]?.id || "",
+    const nextRecipientId =
+      selectedPaymentRecipientId || paymentRecipients[0]?.id || "";
+    const nextRecipient = paymentRecipients.find(
+      (recipient) => recipient.id === nextRecipientId,
     );
-    setPayableRecipientSearch("");
+    setSelectedPaymentRecipientId(nextRecipientId);
+    setPayableRecipientSearch(
+      nextRecipient ? paymentRecipientOptionText(nextRecipient) : "",
+    );
     setPayableAmount("0.00");
     setPayableRemarks("");
     setPayableDialogOpen(true);
@@ -6469,6 +6478,8 @@ function CostPayableModule({
   statusDisabledReason: string;
 }) {
   const [recipientListSearch, setRecipientListSearch] = useState("");
+  const [payableRecipientPickerOpen, setPayableRecipientPickerOpen] =
+    useState(false);
   const matchRecipient = (recipient: PaymentRecipient, keyword: string) => {
     if (!keyword) {
       return true;
@@ -6487,13 +6498,7 @@ function CostPayableModule({
   const matchedPayableRecipients = paymentRecipients.filter((recipient) =>
     matchRecipient(recipient, payableRecipientKeyword),
   );
-  const payableRecipientOptions =
-    selectedPaymentRecipient &&
-    !matchedPayableRecipients.some(
-      (recipient) => recipient.id === selectedPaymentRecipient.id,
-    )
-      ? [selectedPaymentRecipient, ...matchedPayableRecipients]
-      : matchedPayableRecipients;
+  const payableRecipientOptions = matchedPayableRecipients;
   const visibleRecipients = paymentRecipients.filter((recipient) =>
     matchRecipient(recipient, recipientListKeyword),
   );
@@ -6722,33 +6727,60 @@ function CostPayableModule({
                   ))}
                 </select>
               </label>
-              <label>
-                收款方搜索
-                <input
-                  onChange={(event) =>
-                    setPayableRecipientSearch(event.target.value)
-                  }
-                  placeholder="输入收款方、账户名、账号或支行"
-                  value={payableRecipientSearch}
-                />
-              </label>
-              <label>
-                收款方
-                <select
-                  onChange={(event) =>
-                    setSelectedPaymentRecipientId(event.target.value)
-                  }
-                  value={selectedPaymentRecipientId}
-                >
-                  <option value="">选择已有收款人</option>
-                  {payableRecipientOptions.map((recipient) => (
-                    <option key={recipient.id} value={recipient.id}>
-                      {recipient.name} ·{" "}
-                      {paymentRecipientAccountText(recipient)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="field-block">
+                <span className="field-label">收款方</span>
+                <div className="recipient-combobox">
+                  <input
+                    autoComplete="off"
+                    onBlur={() => {
+                      setTimeout(
+                        () => setPayableRecipientPickerOpen(false),
+                        120,
+                      );
+                    }}
+                    onChange={(event) => {
+                      setPayableRecipientSearch(event.target.value);
+                      setPayableRecipientPickerOpen(true);
+                      setSelectedPaymentRecipientId("");
+                    }}
+                    onFocus={() => setPayableRecipientPickerOpen(true)}
+                    placeholder="搜索并选择收款方、账户名、账号或支行"
+                    value={payableRecipientSearch}
+                  />
+                  {payableRecipientPickerOpen ? (
+                    <div className="recipient-picker-list">
+                      {payableRecipientOptions.length > 0 ? (
+                        payableRecipientOptions.map((recipient) => (
+                          <button
+                            data-selected={
+                              selectedPaymentRecipientId === recipient.id
+                            }
+                            key={recipient.id}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              setSelectedPaymentRecipientId(recipient.id);
+                              setPayableRecipientSearch(
+                                paymentRecipientOptionText(recipient),
+                              );
+                              setPayableRecipientPickerOpen(false);
+                            }}
+                            type="button"
+                          >
+                            <strong>{recipient.name}</strong>
+                            <span>
+                              {paymentRecipientAccountText(recipient)}
+                            </span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="recipient-picker-empty">
+                          没有匹配的收款人
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
               <div className="definition-list compact">
                 <div>
                   <span>收款账户</span>
