@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 type ApiUser = {
   email: string;
@@ -1061,66 +1061,6 @@ export default function Home() {
 
     return "";
   };
-  const metrics = useMemo(() => {
-    const income = bills.reduce(
-      (total, bill) => total + Number(bill.totalAmount ?? 0),
-      0,
-    );
-    const receivable = bills.reduce(
-      (total, bill) =>
-        total + Number(bill.totalAmount ?? 0) - Number(bill.receiptAmount ?? 0),
-      0,
-    );
-    const uninvoiced = bills.reduce(
-      (total, bill) =>
-        total + Number(bill.totalAmount ?? 0) - Number(bill.invoiceAmount ?? 0),
-      0,
-    );
-    const cost = costEntries.reduce(
-      (total, row) => total + Number(row.amount ?? 0),
-      0,
-    );
-    const profit = profits.reduce(
-      (total, row) => total + Number(row.profitAmount ?? 0),
-      0,
-    );
-
-    return [
-      { label: "本期收入", value: money(income) },
-      { label: "未收金额", value: money(receivable) },
-      { label: "未开票金额", value: money(uninvoiced) },
-      { label: "本期成本", value: money(cost) },
-      { label: "付款申请", value: paymentRequests.length.toString() },
-      { label: "毛利", value: money(profit) },
-    ];
-  }, [bills, costEntries, paymentRequests.length, profits]);
-
-  const pendingTasks = useMemo(
-    () => [
-      {
-        label: "待审批应收",
-        value: bills.filter((bill) => bill.status === "PENDING_APPROVAL")
-          .length,
-      },
-      {
-        label: "待开票应收",
-        value: bills.filter((bill) => bill.status === "PENDING_SETTLEMENT")
-          .length,
-      },
-      {
-        label: "待到账应收",
-        value: bills.filter((bill) => bill.status === "INVOICED").length,
-      },
-      {
-        label: "待审批付款",
-        value: paymentRequests.filter(
-          (request) => request.status === "SUBMITTED",
-        ).length,
-      },
-    ],
-    [bills, paymentRequests],
-  );
-
   function applyConsoleData(data: ConsoleData) {
     setCustomers(data.customers);
     setSigningEntities(data.signingEntities);
@@ -2714,8 +2654,12 @@ export default function Home() {
         {active === "dashboard" ? (
           <DashboardModule
             bills={bills}
-            metrics={metrics}
-            pendingTasks={pendingTasks}
+            contracts={contracts}
+            costEntries={costEntries}
+            customers={customers}
+            payables={payables}
+            paymentRequests={paymentRequests}
+            periodMonth={periodMonth}
             profits={profits}
             setActive={setActive}
           />
@@ -2977,66 +2921,343 @@ export default function Home() {
 
 function DashboardModule({
   bills,
-  metrics,
-  pendingTasks,
+  contracts,
+  costEntries,
+  customers,
+  payables,
+  paymentRequests,
+  periodMonth,
   profits,
   setActive,
 }: {
   bills: Bill[];
-  metrics: Array<{ label: string; value: string }>;
-  pendingTasks: Array<{ label: string; value: number }>;
+  contracts: Contract[];
+  costEntries: CostEntry[];
+  customers: Customer[];
+  payables: Payable[];
+  paymentRequests: PaymentRequest[];
+  periodMonth: string;
   profits: ProfitRow[];
   setActive: (module: ModuleId) => void;
 }) {
+  const receivableTotal = sumAmount(bills, (bill) => bill.totalAmount);
+  const receivedAmount = sumAmount(bills, (bill) => bill.receiptAmount);
+  const invoicedAmount = sumAmount(bills, (bill) => bill.invoiceAmount);
+  const unreceivedAmount = Math.max(0, receivableTotal - receivedAmount);
+  const uninvoicedAmount = Math.max(0, receivableTotal - invoicedAmount);
+  const periodPayables = payables.filter(
+    (payable) =>
+      (payable.periodMonth ?? payable.bill?.periodMonth ?? periodMonth) ===
+      periodMonth,
+  );
+  const payableTotal = sumAmount(periodPayables, (payable) => payable.amount);
+  const paidPayableAmount = sumAmount(periodPayables, (payable) =>
+    payable.status === "PAID" ? payable.amount : payable.paidAmount,
+  );
+  const payableOutstanding = Math.max(0, payableTotal - paidPayableAmount);
+  const costTotal = Math.max(
+    payableTotal,
+    sumAmount(costEntries, (row) => row.amount),
+  );
+  const profitAmount =
+    profits.length > 0
+      ? sumAmount(profits, (row) => row.profitAmount)
+      : receivableTotal - costTotal;
+  const grossMargin = receivableTotal > 0 ? profitAmount / receivableTotal : 0;
+  const activeContracts = contracts.filter(
+    (contract) => contractStatus(contract) === "合作中",
+  ).length;
+
+  const pendingApprovalReceivable = dashboardStatusRow(
+    "待审批",
+    bills,
+    "PENDING_APPROVAL",
+    "danger",
+  );
+  const pendingSettlementReceivable = dashboardStatusRow(
+    "待结算",
+    bills,
+    "PENDING_SETTLEMENT",
+    "danger",
+  );
+  const invoicedReceivable = dashboardStatusRow(
+    "已开票",
+    bills,
+    "INVOICED",
+    "danger",
+  );
+  const receivableRows = [
+    pendingApprovalReceivable,
+    pendingSettlementReceivable,
+    invoicedReceivable,
+    dashboardStatusRow("已到账", bills, "RECEIVED", "ok"),
+  ];
+  const payableRows = [
+    dashboardPayableRow(
+      "待支付",
+      periodPayables,
+      ["UNPAID", "PARTIALLY_PAID"],
+      "danger",
+    ),
+    dashboardPayableRow("已开票/确认", periodPayables, "CONFIRMED", "danger"),
+    dashboardPayableRow("已支付", periodPayables, "PAID", "ok"),
+  ];
+  const taskItems = [
+    {
+      amount: pendingApprovalReceivable.amount,
+      label: "应收待审批",
+      module: "receivableBilling" as ModuleId,
+      value: pendingApprovalReceivable.count,
+    },
+    {
+      amount: pendingSettlementReceivable.amount,
+      label: "应收待结算",
+      module: "receivableBilling" as ModuleId,
+      value: pendingSettlementReceivable.count,
+    },
+    {
+      amount: invoicedReceivable.amount,
+      label: "应收待到账",
+      module: "receivableBilling" as ModuleId,
+      value: invoicedReceivable.count,
+    },
+    {
+      amount: payableOutstanding,
+      label: "应付待处理",
+      module: "costPayable" as ModuleId,
+      value: periodPayables.filter((payable) =>
+        ["UNPAID", "CONFIRMED", "PARTIALLY_PAID"].includes(payable.status),
+      ).length,
+    },
+    {
+      amount: sumAmount(paymentRequests, (request) => request.requestedAmount),
+      label: "付款申请待审批",
+      module: "costPayable" as ModuleId,
+      value: paymentRequests.filter((request) => request.status === "SUBMITTED")
+        .length,
+    },
+  ];
+  const redTaskCount = taskItems.reduce(
+    (total, task) => total + (task.value > 0 ? 1 : 0),
+    0,
+  );
+  const negativeProfits = profits.filter(
+    (row) => amountNumber(row.profitAmount) < 0,
+  );
+  const riskAlerts = [
+    ...taskItems
+      .filter((task) => task.value > 0)
+      .map((task) => ({
+        label: `${task.label} ${task.value} 项，金额 ${money(task.amount)}`,
+        module: task.module,
+      })),
+    ...(uninvoicedAmount > 0
+      ? [
+          {
+            label: `未开票金额 ${money(uninvoicedAmount)}，会影响后续到账。`,
+            module: "receivableBilling" as ModuleId,
+          },
+        ]
+      : []),
+    ...(unreceivedAmount > 0
+      ? [
+          {
+            label: `未到账金额 ${money(unreceivedAmount)}，需要跟进回款。`,
+            module: "receivableBilling" as ModuleId,
+          },
+        ]
+      : []),
+    ...(negativeProfits.length > 0
+      ? [
+          {
+            label: `${negativeProfits.length} 个客户毛利为负，需要复盘成本或报价。`,
+            module: "closing" as ModuleId,
+          },
+        ]
+      : []),
+    ...(customers.length === 0
+      ? [
+          {
+            label: "还没有客户，正式业务尚未建档。",
+            module: "customers" as ModuleId,
+          },
+        ]
+      : []),
+    ...(contracts.length === 0 && customers.length > 0
+      ? [
+          {
+            label: "已有客户但没有合同，账单无法形成稳定规则。",
+            module: "contracts" as ModuleId,
+          },
+        ]
+      : []),
+  ];
+  const metricCards = [
+    {
+      label: "本期应收",
+      sublabel: `${bills.length} 张账单`,
+      value: money(receivableTotal),
+    },
+    {
+      label: "已到账",
+      sublabel: collectionText(receivedAmount, receivableTotal),
+      value: money(receivedAmount),
+    },
+    {
+      label: "未到账",
+      sublabel: "需要跟进",
+      tone: unreceivedAmount > 0 ? "danger" : "ok",
+      value: money(unreceivedAmount),
+    },
+    {
+      label: "应付余额",
+      sublabel: `${periodPayables.length} 条应付`,
+      tone: payableOutstanding > 0 ? "danger" : "ok",
+      value: money(payableOutstanding),
+    },
+    {
+      label: profits.length > 0 ? "已核算毛利" : "测算毛利",
+      sublabel: `毛利率 ${formatPercent(grossMargin)}`,
+      tone: profitAmount < 0 ? "danger" : "ok",
+      value: money(profitAmount),
+    },
+    {
+      label: "红色待办",
+      sublabel: redTaskCount > 0 ? "需要优先处理" : "暂无卡点",
+      tone: redTaskCount > 0 ? "danger" : "ok",
+      value: redTaskCount.toString(),
+    },
+  ];
+  const businessRows = [
+    { label: "客户", value: customers.length },
+    { label: "合作中合同", value: activeContracts },
+    { label: "本期应收账单", value: bills.length },
+    { label: "本期成本应付", value: periodPayables.length },
+  ];
+  const topProfitRows = [...profits]
+    .sort(
+      (left, right) =>
+        amountNumber(right.profitAmount) - amountNumber(left.profitAmount),
+    )
+    .slice(0, 6);
+
   return (
     <section className="workspace dashboard-layout">
-      <div className="metric-grid" aria-label="关键指标">
-        {metrics.map((metric) => (
-          <div className="metric" key={metric.label}>
+      <div className="metric-grid dashboard-metrics" aria-label="关键指标">
+        {metricCards.map((metric) => (
+          <div className="metric" data-tone={metric.tone} key={metric.label}>
             <span>{metric.label}</span>
             <strong>{metric.value}</strong>
+            <small>{metric.sublabel}</small>
           </div>
         ))}
       </div>
 
-      <div className="panel">
+      <div
+        className="panel dashboard-alert-panel"
+        data-empty={riskAlerts.length === 0}
+      >
         <div className="panel-header">
-          <h2>本月待办</h2>
-          <span>按业务顺序处理</span>
+          <h2>异常与待办</h2>
+          <span>
+            {riskAlerts.length > 0 ? "红色优先处理" : "当前无红色提醒"}
+          </span>
+        </div>
+        <div className="alert-list">
+          {riskAlerts.length > 0 ? (
+            riskAlerts.map((alert) => (
+              <button
+                data-alert="true"
+                key={alert.label}
+                onClick={() => setActive(alert.module)}
+                type="button"
+              >
+                {alert.label}
+              </button>
+            ))
+          ) : (
+            <div className="empty-state">当前账期没有需要红色提醒的异常。</div>
+          )}
+        </div>
+      </div>
+
+      <div className="panel task-panel">
+        <div className="panel-header">
+          <h2>待办队列</h2>
+          <span>按流程推进</span>
         </div>
         <div className="task-list">
-          {pendingTasks.map((task) => (
+          {taskItems.map((task) => (
             <button
               className="task-row"
+              data-alert={task.value > 0}
               key={task.label}
-              onClick={() =>
-                task.label.includes("付款")
-                  ? setActive("costPayable")
-                  : task.label.includes("客户确认")
-                    ? setActive("receivableBilling")
-                    : setActive("receivableBilling")
-              }
+              onClick={() => setActive(task.module)}
               type="button"
             >
-              <span>{task.label}</span>
+              <span>
+                {task.label}
+                <small>{money(task.amount)}</small>
+              </span>
               <strong>{task.value}</strong>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="panel">
+      <div className="panel chart-panel">
         <div className="panel-header">
-          <h2>标准月结流程</h2>
-          <span>从客户到利润</span>
+          <h2>应收状态</h2>
+          <span>{periodMonth}</span>
         </div>
-        <ol className="flow-list">
-          <li>维护客户、签约主体、合同和服务费规则</li>
-          <li>新增账单应收，填写客户、合同、月份和金额</li>
-          <li>总负责人审批后进入待结算</li>
-          <li>财务上传发票源文件、银行回单并确认到账</li>
-          <li>新增关联账单的成本应付，付款后关闭账期</li>
-        </ol>
+        <DashboardBarChart rows={receivableRows} />
+      </div>
+
+      <div className="panel chart-panel">
+        <div className="panel-header">
+          <h2>回款进度</h2>
+          <span>{collectionText(receivedAmount, receivableTotal)}</span>
+        </div>
+        <DashboardDonut
+          label="到账率"
+          total={receivableTotal}
+          value={receivedAmount}
+        />
+      </div>
+
+      <div className="panel chart-panel">
+        <div className="panel-header">
+          <h2>应付状态</h2>
+          <span>{periodMonth}</span>
+        </div>
+        <DashboardBarChart rows={payableRows} />
+      </div>
+
+      <div className="panel chart-panel">
+        <div className="panel-header">
+          <h2>业务规模</h2>
+          <span>客户到结算</span>
+        </div>
+        <div className="business-number-grid">
+          {businessRows.map((row) => (
+            <div key={row.label}>
+              <strong>{row.value}</strong>
+              <span>{row.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel chart-panel profit-chart-panel">
+        <div className="panel-header">
+          <h2>客户毛利排行</h2>
+          <span>{profits.length > 0 ? "已关闭账期" : "暂无已核算利润"}</span>
+        </div>
+        {topProfitRows.length > 0 ? (
+          <DashboardProfitBars rows={topProfitRows} />
+        ) : (
+          <div className="empty-state">账期关闭后会在这里显示客户利润。</div>
+        )}
       </div>
 
       <TablePanel title="最近账单" count={`${bills.length} 条`}>
@@ -3046,6 +3267,174 @@ function DashboardModule({
       <ProfitTable profits={profits} />
     </section>
   );
+}
+
+function DashboardBarChart({
+  rows,
+}: {
+  rows: Array<{
+    amount: number;
+    count: number;
+    label: string;
+    tone?: string;
+  }>;
+}) {
+  const maxAmount = Math.max(...rows.map((row) => row.amount), 1);
+
+  return (
+    <div className="dashboard-bars">
+      {rows.map((row) => (
+        <div className="dashboard-bar-row" data-tone={row.tone} key={row.label}>
+          <div>
+            <span>{row.label}</span>
+            <strong>{row.count} 项</strong>
+          </div>
+          <div className="bar-track" aria-hidden="true">
+            <span
+              style={{ width: `${boundedPercent(row.amount, maxAmount)}%` }}
+            />
+          </div>
+          <em>{money(row.amount)}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DashboardDonut({
+  label,
+  total,
+  value,
+}: {
+  label: string;
+  total: number;
+  value: number;
+}) {
+  const progress = boundedPercent(value, total);
+  const degrees = progress * 3.6;
+
+  return (
+    <div className="donut-wrap">
+      <div
+        aria-label={`${label}${progress.toFixed(1)}%`}
+        className="donut"
+        role="img"
+        style={{
+          background: `conic-gradient(var(--accent) 0deg ${degrees}deg, #e3e9e5 ${degrees}deg 360deg)`,
+        }}
+      >
+        <div>
+          <strong>{progress.toFixed(1)}%</strong>
+          <span>{label}</span>
+        </div>
+      </div>
+      <div className="donut-legend">
+        <div>
+          <span>已到账</span>
+          <strong>{money(value)}</strong>
+        </div>
+        <div>
+          <span>未到账</span>
+          <strong>{money(Math.max(0, total - value))}</strong>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardProfitBars({ rows }: { rows: ProfitRow[] }) {
+  const maxProfit = Math.max(
+    ...rows.map((row) => Math.abs(amountNumber(row.profitAmount))),
+    1,
+  );
+
+  return (
+    <div className="dashboard-bars">
+      {rows.map((row) => {
+        const profit = amountNumber(row.profitAmount);
+        return (
+          <div
+            className="dashboard-bar-row"
+            data-tone={profit < 0 ? "danger" : "ok"}
+            key={row.customerName}
+          >
+            <div>
+              <span>{row.customerName}</span>
+              <strong>毛利率 {row.grossMargin ?? "-"}</strong>
+            </div>
+            <div className="bar-track" aria-hidden="true">
+              <span
+                style={{
+                  width: `${boundedPercent(Math.abs(profit), maxProfit)}%`,
+                }}
+              />
+            </div>
+            <em>{money(profit)}</em>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function dashboardStatusRow(
+  label: string,
+  bills: Bill[],
+  status: string,
+  tone?: string,
+) {
+  const filtered = bills.filter((bill) => bill.status === status);
+  return {
+    amount: sumAmount(filtered, (bill) => bill.totalAmount),
+    count: filtered.length,
+    label,
+    tone: filtered.length > 0 ? tone : undefined,
+  };
+}
+
+function dashboardPayableRow(
+  label: string,
+  payables: Payable[],
+  status: string | string[],
+  tone?: string,
+) {
+  const statuses = Array.isArray(status) ? status : [status];
+  const filtered = payables.filter((payable) =>
+    statuses.includes(payable.status),
+  );
+  return {
+    amount: sumAmount(filtered, (payable) => payable.amount),
+    count: filtered.length,
+    label,
+    tone: filtered.length > 0 ? tone : undefined,
+  };
+}
+
+function amountNumber(value: string | number | null | undefined) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sumAmount<T>(
+  rows: T[],
+  read: (row: T) => string | number | null | undefined,
+) {
+  return rows.reduce((total, row) => total + amountNumber(read(row)), 0);
+}
+
+function boundedPercent(value: number, total: number) {
+  if (total <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, (value / total) * 100));
+}
+
+function formatPercent(value: number) {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function collectionText(receivedAmount: number, totalAmount: number) {
+  return `到账率 ${boundedPercent(receivedAmount, totalAmount).toFixed(1)}%`;
 }
 
 function ActivationModule({ apiBase }: { apiBase: string }) {
