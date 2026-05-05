@@ -198,6 +198,7 @@ type PaymentRecipient = {
   platform: PaymentRecipientPlatform;
   accountName: string;
   accountNo: string;
+  attachmentCount?: number;
   bankBranch?: string | null;
   isActive?: boolean;
 };
@@ -993,6 +994,10 @@ function isBusinessAttachmentValid(file: File) {
   );
 }
 
+function isGeneralAttachmentValid(file: File) {
+  return file.size > 0 && file.size <= contractAttachmentMaxBytes;
+}
+
 function amountInput(value: number) {
   return Math.max(0, value).toFixed(2);
 }
@@ -1139,6 +1144,11 @@ export default function Home() {
   const [payableAttachments, setPayableAttachments] = useState<Attachment[]>(
     [],
   );
+  const [recipientAttachmentsDialogOpen, setRecipientAttachmentsDialogOpen] =
+    useState(false);
+  const [recipientAttachments, setRecipientAttachments] = useState<
+    Attachment[]
+  >([]);
   const [payablePaymentAccount, setPayablePaymentAccount] =
     useState("默认付款账户");
   const [receiptAccount, setReceiptAccount] = useState("默认收款账户");
@@ -1152,6 +1162,7 @@ export default function Home() {
   const [recipientAccountName, setRecipientAccountName] = useState("");
   const [recipientAccountNo, setRecipientAccountNo] = useState("");
   const [recipientBankBranch, setRecipientBankBranch] = useState("");
+  const [recipientFiles, setRecipientFiles] = useState<File[]>([]);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserName, setNewUserName] = useState("");
@@ -2055,6 +2066,22 @@ export default function Home() {
     setter(nextFiles);
   }
 
+  function updateGeneralFiles(
+    fileList: FileList | null,
+    setter: (files: File[]) => void,
+    label: string,
+  ) {
+    const nextFiles = Array.from(fileList ?? []);
+    const invalid = nextFiles.find((file) => !isGeneralAttachmentValid(file));
+    if (invalid) {
+      setter([]);
+      setMessage(`${label} ${invalid.name} 不符合要求：单个文件需小于 20MB。`);
+      return;
+    }
+
+    setter(nextFiles);
+  }
+
   function createCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!customerName.trim() || !customerFullName.trim()) {
@@ -2844,6 +2871,7 @@ export default function Home() {
     setRecipientAccountName("");
     setRecipientAccountNo("");
     setRecipientBankBranch("");
+    setRecipientFiles([]);
   }
 
   function openCreateRecipientDialog() {
@@ -2870,6 +2898,7 @@ export default function Home() {
     setRecipientAccountName(recipient.accountName);
     setRecipientAccountNo(recipient.accountNo);
     setRecipientBankBranch(recipient.bankBranch ?? "");
+    setRecipientFiles([]);
     setRecipientDialogOpen(true);
   }
 
@@ -2885,7 +2914,7 @@ export default function Home() {
       !recipientAccountName.trim() ||
       !recipientAccountNo.trim()
     ) {
-      setMessage("保存收款人失败：收款方名称、账户名和账号不能为空。");
+      setMessage("保存收款人失败：资源名称、账户名和账号不能为空。");
       return;
     }
 
@@ -2909,6 +2938,13 @@ export default function Home() {
             }),
           },
         );
+        if (recipientFiles.length > 0) {
+          await uploadAttachments(
+            "payment_recipient",
+            result.id,
+            recipientFiles,
+          );
+        }
         setSelectedPaymentRecipientId(result.id);
         setRecipientDialogOpen(false);
         resetRecipientForm();
@@ -3076,6 +3112,35 @@ export default function Home() {
   function closePayableAttachmentsDialog() {
     setPayableAttachmentsDialogOpen(false);
     setPayableAttachments([]);
+    setAttachmentPreview(null);
+  }
+
+  async function loadRecipientAttachments(recipient: PaymentRecipient) {
+    try {
+      const page = await request<PaginatedResponse<Attachment>>(
+        `/attachments?ownerType=payment_recipient&ownerId=${encodeURIComponent(recipient.id)}&pageSize=100`,
+      );
+      setRecipientAttachments(listItems(page));
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `加载资源附件失败：${translateErrorMessage(error.message)}`
+          : "加载资源附件失败",
+      );
+    }
+  }
+
+  function openRecipientAttachmentsDialog(recipient: PaymentRecipient) {
+    setSelectedPaymentRecipientId(recipient.id);
+    setAttachmentPreview(null);
+    setRecipientAttachments([]);
+    setRecipientAttachmentsDialogOpen(true);
+    void loadRecipientAttachments(recipient);
+  }
+
+  function closeRecipientAttachmentsDialog() {
+    setRecipientAttachmentsDialogOpen(false);
+    setRecipientAttachments([]);
     setAttachmentPreview(null);
   }
 
@@ -3562,6 +3627,7 @@ export default function Home() {
             closePayableAttachmentsDialog={closePayableAttachmentsDialog}
             closePayableDialog={closePayableDialog}
             closePayableStatusDialog={closePayableStatusDialog}
+            closeRecipientAttachmentsDialog={closeRecipientAttachmentsDialog}
             closeRecipientDialog={closeRecipientDialog}
             createCostPayable={createCostPayable}
             deletePaymentRecipient={deletePaymentRecipient}
@@ -3575,6 +3641,7 @@ export default function Home() {
             openEditRecipientDialog={openEditRecipientDialog}
             openPayableAttachmentsDialog={openPayableAttachmentsDialog}
             openPayableStatusDialog={openPayableStatusDialog}
+            openRecipientAttachmentsDialog={openRecipientAttachmentsDialog}
             payableAmount={payableAmount}
             payableAttachments={payableAttachments}
             payableAttachmentsDialogOpen={payableAttachmentsDialogOpen}
@@ -3590,8 +3657,11 @@ export default function Home() {
             paymentRecipients={paymentRecipients}
             recipientAccountName={recipientAccountName}
             recipientAccountNo={recipientAccountNo}
+            recipientAttachments={recipientAttachments}
+            recipientAttachmentsDialogOpen={recipientAttachmentsDialogOpen}
             recipientBankBranch={recipientBankBranch}
             recipientDialogOpen={recipientDialogOpen}
+            recipientFiles={recipientFiles}
             recipientName={recipientName}
             recipientPlatform={recipientPlatform}
             savePayableStatus={savePayableStatus}
@@ -3613,6 +3683,9 @@ export default function Home() {
             setRecipientAccountName={setRecipientAccountName}
             setRecipientAccountNo={setRecipientAccountNo}
             setRecipientBankBranch={setRecipientBankBranch}
+            setRecipientFiles={(fileList) =>
+              updateGeneralFiles(fileList, setRecipientFiles, "资源附件")
+            }
             setRecipientName={setRecipientName}
             setRecipientPlatform={setRecipientPlatform}
             setSelectedBillId={setSelectedBillId}
@@ -6429,6 +6502,7 @@ function CostPayableModule({
   closePayableAttachmentsDialog,
   closePayableDialog,
   closePayableStatusDialog,
+  closeRecipientAttachmentsDialog,
   closeRecipientDialog,
   createCostPayable,
   deletePaymentRecipient,
@@ -6440,6 +6514,7 @@ function CostPayableModule({
   openEditRecipientDialog,
   openPayableAttachmentsDialog,
   openPayableStatusDialog,
+  openRecipientAttachmentsDialog,
   payableAmount,
   payableAttachments,
   payableAttachmentsDialogOpen,
@@ -6455,8 +6530,11 @@ function CostPayableModule({
   paymentRecipients,
   recipientAccountName,
   recipientAccountNo,
+  recipientAttachments,
+  recipientAttachmentsDialogOpen,
   recipientBankBranch,
   recipientDialogOpen,
+  recipientFiles,
   recipientName,
   recipientPlatform,
   savePayableStatus,
@@ -6476,6 +6554,7 @@ function CostPayableModule({
   setRecipientAccountName,
   setRecipientAccountNo,
   setRecipientBankBranch,
+  setRecipientFiles,
   setRecipientName,
   setRecipientPlatform,
   setSelectedBillId,
@@ -6488,6 +6567,7 @@ function CostPayableModule({
   closePayableAttachmentsDialog: () => void;
   closePayableDialog: () => void;
   closePayableStatusDialog: () => void;
+  closeRecipientAttachmentsDialog: () => void;
   closeRecipientDialog: () => void;
   createCostPayable: (event: FormEvent<HTMLFormElement>) => void;
   deletePaymentRecipient: (recipient: PaymentRecipient) => void;
@@ -6499,6 +6579,7 @@ function CostPayableModule({
   openEditRecipientDialog: (recipient: PaymentRecipient) => void;
   openPayableAttachmentsDialog: (payable: Payable) => void;
   openPayableStatusDialog: (payable: Payable) => void;
+  openRecipientAttachmentsDialog: (recipient: PaymentRecipient) => void;
   payableAmount: string;
   payableAttachments: Attachment[];
   payableAttachmentsDialogOpen: boolean;
@@ -6514,8 +6595,11 @@ function CostPayableModule({
   paymentRecipients: PaymentRecipient[];
   recipientAccountName: string;
   recipientAccountNo: string;
+  recipientAttachments: Attachment[];
+  recipientAttachmentsDialogOpen: boolean;
   recipientBankBranch: string;
   recipientDialogOpen: boolean;
+  recipientFiles: File[];
   recipientName: string;
   recipientPlatform: PaymentRecipientPlatform;
   savePayableStatus: (event: FormEvent<HTMLFormElement>) => void;
@@ -6535,6 +6619,7 @@ function CostPayableModule({
   setRecipientAccountName: (value: string) => void;
   setRecipientAccountNo: (value: string) => void;
   setRecipientBankBranch: (value: string) => void;
+  setRecipientFiles: (fileList: FileList | null) => void;
   setRecipientName: (value: string) => void;
   setRecipientPlatform: (value: PaymentRecipientPlatform) => void;
   setSelectedBillId: (value: string) => void;
@@ -6696,18 +6781,19 @@ function CostPayableModule({
             <div className="table-toolbar">
               <input
                 onChange={(event) => setRecipientListSearch(event.target.value)}
-                placeholder="搜索收款方、账户名、账号、支行"
+                placeholder="搜索资源名称、账户名、账号、支行"
                 value={recipientListSearch}
               />
             </div>
             <table>
               <thead>
                 <tr>
-                  <th>收款方名称</th>
+                  <th>资源名称</th>
                   <th>收款平台</th>
                   <th>账户名</th>
                   <th>账号</th>
                   <th>银行支行</th>
+                  <th>附件</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -6723,6 +6809,21 @@ function CostPayableModule({
                     <td>{recipient.accountName}</td>
                     <td>{recipient.accountNo}</td>
                     <td>{recipient.bankBranch ?? "-"}</td>
+                    <td>
+                      <button
+                        className="link-button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openRecipientAttachmentsDialog(recipient);
+                        }}
+                        type="button"
+                      >
+                        查看附件
+                        {recipient.attachmentCount
+                          ? `（${recipient.attachmentCount}）`
+                          : ""}
+                      </button>
+                    </td>
                     <td>
                       <div className="row-actions">
                         <button
@@ -6793,7 +6894,7 @@ function CostPayableModule({
                 </select>
               </label>
               <div className="field-block">
-                <span className="field-label">收款方</span>
+                <span className="field-label">资源名称</span>
                 <div className="recipient-combobox">
                   <input
                     autoComplete="off"
@@ -6809,7 +6910,7 @@ function CostPayableModule({
                       setSelectedPaymentRecipientId("");
                     }}
                     onFocus={() => setPayableRecipientPickerOpen(true)}
-                    placeholder="搜索并选择收款方、账户名、账号或支行"
+                    placeholder="搜索并选择资源名称、账户名、账号或支行"
                     value={payableRecipientSearch}
                   />
                   {payableRecipientPickerOpen ? (
@@ -6848,7 +6949,7 @@ function CostPayableModule({
               </div>
               <div className="definition-list compact">
                 <div>
-                  <span>收款账户</span>
+                  <span>资源账户</span>
                   <strong>
                     {selectedPaymentRecipient
                       ? paymentRecipientAccountText(selectedPaymentRecipient)
@@ -6908,7 +7009,7 @@ function CostPayableModule({
             </div>
             <form className="module-form" onSubmit={savePaymentRecipient}>
               <label>
-                收款方名称
+                资源名称
                 <input
                   onChange={(event) => setRecipientName(event.target.value)}
                   value={recipientName}
@@ -6960,6 +7061,21 @@ function CostPayableModule({
                   value={recipientBankBranch}
                 />
               </label>
+              <label>
+                附件
+                <input
+                  multiple
+                  onChange={(event) => setRecipientFiles(event.target.files)}
+                  type="file"
+                />
+              </label>
+              <small className="file-list">
+                {recipientFiles.length > 0
+                  ? recipientFiles.map((file) => (
+                      <span key={`${file.name}-${file.size}`}>{file.name}</span>
+                    ))
+                  : "可上传多个附件，非必传，单个文件小于 20MB。"}
+              </small>
               {disabledReason ? (
                 <small className="form-note">{disabledReason}</small>
               ) : null}
@@ -7121,6 +7237,93 @@ function CostPayableModule({
                         selectedPayable,
                       )}
                     </strong>
+                    <small>{dateTimeText(attachment.createdAt)}</small>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">暂无附件</div>
+              )}
+            </div>
+            {attachmentPreview ? (
+              <div className="attachment-preview">
+                <div className="panel-header">
+                  <h2>{attachmentPreview.attachment.fileName}</h2>
+                  <a
+                    href={attachmentPreview.url}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    下载
+                  </a>
+                </div>
+                {isPreviewableAttachment(attachmentPreview.attachment) ? (
+                  attachmentPreview.attachment.contentType?.startsWith(
+                    "image/",
+                  ) ? (
+                    <img
+                      alt={attachmentPreview.attachment.fileName}
+                      src={attachmentPreview.url}
+                    />
+                  ) : (
+                    <iframe
+                      src={attachmentPreview.url}
+                      title={attachmentPreview.attachment.fileName}
+                    />
+                  )
+                ) : (
+                  <div className="empty-state">该附件请下载查看</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {recipientAttachmentsDialogOpen && selectedPaymentRecipient ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeRecipientAttachmentsDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>资源附件</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeRecipientAttachmentsDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="definition-list compact">
+              <div>
+                <span>资源名称</span>
+                <strong>{selectedPaymentRecipient.name}</strong>
+              </div>
+              <div>
+                <span>收款账户</span>
+                <strong>
+                  {paymentRecipientAccountText(selectedPaymentRecipient)}
+                </strong>
+              </div>
+            </div>
+            <div className="attachment-list">
+              {recipientAttachments.length > 0 ? (
+                recipientAttachments.map((attachment) => (
+                  <button
+                    className="attachment-row"
+                    key={attachment.id}
+                    onClick={() => openAttachmentPreview(attachment)}
+                    type="button"
+                  >
+                    <span>{attachment.fileName}</span>
+                    <strong>资源附件</strong>
                     <small>{dateTimeText(attachment.createdAt)}</small>
                   </button>
                 ))

@@ -17,6 +17,7 @@ import {
   Prisma,
   ReceiptStatus,
 } from "@prisma/client";
+import type { PaymentRecipient } from "@prisma/client";
 
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
 
@@ -649,8 +650,18 @@ export class FinanceService {
       }),
       this.prisma.paymentRecipient.count({ where }),
     ]);
+    const attachmentCounts = await this.paymentRecipientAttachmentCounts(
+      user.orgId,
+      items.map((item) => item.id),
+    );
 
-    return paginated(items, total, pagination);
+    return paginated(
+      items.map((item) =>
+        this.presentPaymentRecipient(item, attachmentCounts.get(item.id) ?? 0),
+      ),
+      total,
+      pagination,
+    );
   }
 
   async createPaymentRecipient(user: AuthenticatedUser, rawBody: unknown) {
@@ -680,7 +691,7 @@ export class FinanceService {
       },
     });
 
-    return recipient;
+    return this.presentPaymentRecipient(recipient);
   }
 
   async updatePaymentRecipient(
@@ -724,7 +735,15 @@ export class FinanceService {
       },
     });
 
-    return updated;
+    const attachmentCounts = await this.paymentRecipientAttachmentCounts(
+      user.orgId,
+      [updated.id],
+    );
+
+    return this.presentPaymentRecipient(
+      updated,
+      attachmentCounts.get(updated.id) ?? 0,
+    );
   }
 
   async removePaymentRecipient(user: AuthenticatedUser, id: string) {
@@ -1588,7 +1607,21 @@ export class FinanceService {
       ...(filters.ownerType ? { ownerType: filters.ownerType } : {}),
       ...(filters.ownerId ? { ownerId: filters.ownerId } : {}),
     };
-    if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
+    const canAccessPaymentRecipientAttachments =
+      filters.ownerType === "payment_recipient" &&
+      Boolean(filters.ownerId) &&
+      user.permissions.includes(PERMISSION_CODES.COST_MANAGE);
+    if (canAccessPaymentRecipientAttachments) {
+      await this.ensureAttachmentOwnerAccess(
+        user,
+        filters.ownerType,
+        filters.ownerId,
+      );
+    }
+    if (
+      !user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL) &&
+      !canAccessPaymentRecipientAttachments
+    ) {
       where.uploadedById = user.id;
     }
 
@@ -2549,6 +2582,43 @@ export class FinanceService {
     };
   }
 
+  private presentPaymentRecipient(
+    recipient: PaymentRecipient,
+    attachmentCount = 0,
+  ) {
+    return {
+      ...recipient,
+      attachmentCount,
+    };
+  }
+
+  private async paymentRecipientAttachmentCounts(
+    orgId: string,
+    recipientIds: string[],
+  ) {
+    const counts = new Map<string, number>();
+    if (recipientIds.length === 0) {
+      return counts;
+    }
+
+    const groups = await this.prisma.attachment.groupBy({
+      by: ["ownerId"],
+      where: {
+        orgId,
+        ownerType: "payment_recipient",
+        ownerId: { in: recipientIds },
+      },
+      _count: { _all: true },
+    });
+    for (const group of groups) {
+      if (group.ownerId) {
+        counts.set(group.ownerId, group._count._all);
+      }
+    }
+
+    return counts;
+  }
+
   private async ensureAttachmentAccess(
     user: AuthenticatedUser,
     attachment: AttachmentRecord,
@@ -2585,6 +2655,15 @@ export class FinanceService {
       throw new BadRequestException(
         "ownerType and ownerId must be provided together.",
       );
+    }
+    if (ownerType === "payment_recipient") {
+      if (!user.permissions.includes(PERMISSION_CODES.COST_MANAGE)) {
+        throw new ForbiddenException(
+          "You cannot access this payment recipient.",
+        );
+      }
+      await this.ensurePaymentRecipient(user, ownerId);
+      return;
     }
     if (user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
       return;
