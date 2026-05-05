@@ -219,18 +219,32 @@ export class CustomersService {
 
   async remove(user: AuthenticatedUser, id: string) {
     const customer = await this.ensureCustomerAccess(user, id);
-    const usage = await this.prisma.$transaction([
+    const [
+      contractCount,
+      billCount,
+      extraChargeCount,
+      costEntryCount,
+      payableCount,
+      paymentRequestCount,
+    ] = await this.prisma.$transaction([
       this.prisma.contract.count({ where: { customerId: id } }),
       this.prisma.bill.count({ where: { customerId: id } }),
       this.prisma.extraCharge.count({ where: { customerId: id } }),
       this.prisma.costEntry.count({ where: { customerId: id } }),
       this.prisma.payable.count({ where: { customerId: id } }),
       this.prisma.paymentRequest.count({ where: { customerId: id } }),
-      this.prisma.monthlyCustomerMetric.count({ where: { customerId: id } }),
     ]);
-    if (usage.some((count) => count > 0)) {
+    const usage = {
+      contracts: contractCount,
+      bills: billCount,
+      extraCharges: extraChargeCount,
+      costEntries: costEntryCount,
+      payables: payableCount,
+      paymentRequests: paymentRequestCount,
+    };
+    if (Object.values(usage).some((count) => count > 0)) {
       throw new ConflictException(
-        "Customer is already used by business records and cannot be deleted.",
+        `Customer is already used by business records: ${this.formatUsageSummary(usage)}.`,
       );
     }
 
@@ -782,5 +796,12 @@ export class CustomersService {
       }, 0) + 1;
 
     return `${customerCodePrefix}${nextNumber.toString().padStart(3, "0")}`;
+  }
+
+  private formatUsageSummary(usage: Record<string, number>) {
+    return Object.entries(usage)
+      .filter(([, count]) => count > 0)
+      .map(([key, count]) => `${key}=${count}`)
+      .join(", ");
   }
 }

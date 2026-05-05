@@ -310,6 +310,15 @@ const permissionOptions = Object.entries(permissionLabels).map(
   ([code, label]) => ({ code, label }),
 );
 
+const usageLabels: Record<string, string> = {
+  contracts: "合同",
+  bills: "账单",
+  extraCharges: "额外费用",
+  costEntries: "成本",
+  payables: "应付",
+  paymentRequests: "付款申请",
+};
+
 const configuredApiBase = process.env.NEXT_PUBLIC_API_URL?.trim();
 const apiBase = configuredApiBase
   ? configuredApiBase.replace(/\/$/, "")
@@ -436,11 +445,15 @@ function translateErrorMessage(message: string) {
   if (/Signing entity is already used/i.test(message)) {
     return "该签约主体已被合同使用，不能删除。";
   }
-  if (/Customer is already used/i.test(message)) {
-    return "该客户已有关联业务记录，不能删除。";
+  const customerUsage =
+    /Customer is already used by business records: ([^.]+)/i.exec(message);
+  if (customerUsage?.[1]) {
+    return `该客户有关联数据：${translateUsageSummary(customerUsage[1])}。请先清理关联数据后再删除。`;
   }
-  if (/Contract is already used/i.test(message)) {
-    return "该合同已有关联业务记录，不能删除。";
+  const contractUsage =
+    /Contract is already used by business records: ([^.]+)/i.exec(message);
+  if (contractUsage?.[1]) {
+    return `该合同有关联数据：${translateUsageSummary(contractUsage[1])}。请先清理关联数据后再删除。`;
   }
   if (/Contract attachment is required/i.test(message)) {
     return "新建合同必须上传合同附件。";
@@ -502,6 +515,20 @@ function translateErrorMessage(message: string) {
   }
 
   return message;
+}
+
+function translateUsageSummary(summary: string) {
+  return summary
+    .split(",")
+    .map((item) => {
+      const [key, value] = item.split("=").map((part) => part.trim());
+      if (!key || !value) {
+        return "";
+      }
+      return `${usageLabels[key] ?? key} ${value}`;
+    })
+    .filter(Boolean)
+    .join("、");
 }
 
 const modules = [

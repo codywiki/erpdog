@@ -247,9 +247,13 @@ export class ContractsService {
       this.prisma.bill.count({ where: { contractId: id } }),
       this.prisma.extraCharge.count({ where: { contractId: id } }),
     ]);
-    if (billCount > 0 || extraChargeCount > 0) {
+    const usage = {
+      bills: billCount,
+      extraCharges: extraChargeCount,
+    };
+    if (Object.values(usage).some((count) => count > 0)) {
       throw new ConflictException(
-        "Contract is already used by business records and cannot be deleted.",
+        `Contract is already used by business records: ${this.formatUsageSummary(usage)}.`,
       );
     }
 
@@ -1216,5 +1220,12 @@ export class ContractsService {
       }
       return String(value).trim() === "";
     });
+  }
+
+  private formatUsageSummary(usage: Record<string, number>) {
+    return Object.entries(usage)
+      .filter(([, count]) => count > 0)
+      .map(([key, count]) => `${key}=${count}`)
+      .join(", ");
   }
 }
