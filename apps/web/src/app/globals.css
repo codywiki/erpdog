@@ -528,6 +528,13 @@ tr[data-selected="true"] {
   width: min(100%, 760px);
 }
 
+.modal-panel.xl {
+  max-height: calc(100vh - 44px);
+  max-width: 1040px;
+  overflow: auto;
+  width: min(100%, 1040px);
+}
+
 .form-grid {
   display: grid;
   gap: 12px;
@@ -557,6 +564,77 @@ tr[data-selected="true"] {
   border-radius: 999px;
   color: var(--ink);
   padding: 4px 8px;
+}
+
+.sub-tabs {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+}
+
+.sub-tabs button {
+  min-height: 34px;
+}
+
+.sub-tabs button[data-active="true"] {
+  background: #eaf5f1;
+  border-color: #8ebbb1;
+  color: var(--accent-strong);
+}
+
+.nested-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.nested-block {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.nested-title {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.detail-grid {
+  background: #f7fbf9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 12px;
+}
+
+.mode-options,
+.permission-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.mode-options label,
+.permission-grid label,
+.checkbox-row {
+  align-items: center;
+  color: var(--ink);
+  display: inline-flex;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.mode-options input,
+.permission-grid input,
+.checkbox-row input {
+  min-height: auto;
+  width: auto;
 }
 
 .icon-button {
@@ -612,6 +690,8 @@ tr[data-selected="true"] {
   .topbar-actions,
   .auth-actions,
   .form-grid,
+  .detail-grid,
+  .nested-title,
   .metric-grid {
     grid-template-columns: 1fr;
   }

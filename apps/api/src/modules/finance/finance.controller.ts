@@ -168,14 +168,16 @@ export class FinanceController {
   @Get("payables")
   @RequirePermissions(
     PERMISSION_CODES.COST_MANAGE,
+    PERMISSION_CODES.PAYABLE_SETTLE,
     PERMISSION_CODES.PAYMENT_PAY,
   )
   listPayables(
     @CurrentUser() user: AuthenticatedUser,
+    @Query("status") status?: string,
     @Query("page") page?: string,
     @Query("pageSize") pageSize?: string,
   ) {
-    return this.finance.listPayables(user, { page, pageSize });
+    return this.finance.listPayables(user, { status, page, pageSize });
   }
 
   @Post("payables")
@@ -250,7 +252,10 @@ export class FinanceController {
   }
 
   @Get("payments")
-  @RequirePermissions(PERMISSION_CODES.PAYMENT_PAY)
+  @RequirePermissions(
+    PERMISSION_CODES.PAYMENT_PAY,
+    PERMISSION_CODES.PAYABLE_SETTLE,
+  )
   listPayments(
     @CurrentUser() user: AuthenticatedUser,
     @Query("page") page?: string,
@@ -260,13 +265,19 @@ export class FinanceController {
   }
 
   @Post("payments")
-  @RequirePermissions(PERMISSION_CODES.PAYMENT_PAY)
+  @RequirePermissions(
+    PERMISSION_CODES.PAYMENT_PAY,
+    PERMISSION_CODES.PAYABLE_SETTLE,
+  )
   createPayment(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
     return this.finance.createPayment(user, body);
   }
 
   @Post("payments/:id/reverse")
-  @RequirePermissions(PERMISSION_CODES.PAYMENT_PAY)
+  @RequirePermissions(
+    PERMISSION_CODES.PAYMENT_PAY,
+    PERMISSION_CODES.PAYABLE_SETTLE,
+  )
   reversePayment(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
@@ -330,9 +341,12 @@ export class FinanceController {
   @Post("attachments/presign-upload")
   @RequirePermissions(
     PERMISSION_CODES.BILL_MANAGE,
+    PERMISSION_CODES.BILL_APPROVE,
+    PERMISSION_CODES.RECEIVABLE_SETTLE,
     PERMISSION_CODES.INVOICE_MANAGE,
     PERMISSION_CODES.RECEIPT_MANAGE,
     PERMISSION_CODES.COST_MANAGE,
+    PERMISSION_CODES.PAYABLE_SETTLE,
     PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
     PERMISSION_CODES.CONTRACT_WRITE,
   )
@@ -346,9 +360,12 @@ export class FinanceController {
   @Post("attachments")
   @RequirePermissions(
     PERMISSION_CODES.BILL_MANAGE,
+    PERMISSION_CODES.BILL_APPROVE,
+    PERMISSION_CODES.RECEIVABLE_SETTLE,
     PERMISSION_CODES.INVOICE_MANAGE,
     PERMISSION_CODES.RECEIPT_MANAGE,
     PERMISSION_CODES.COST_MANAGE,
+    PERMISSION_CODES.PAYABLE_SETTLE,
     PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
     PERMISSION_CODES.CONTRACT_WRITE,
   )

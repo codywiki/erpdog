@@ -2,6 +2,7 @@ export const ROLE_CODES = {
   ADMIN: "admin",
   OWNER: "owner",
   FINANCE: "finance",
+  BUSINESS_OWNER: "business_owner",
   CUSTOMER_MANAGER: "customer_manager",
 } as const;
 
@@ -14,9 +15,12 @@ export const PERMISSION_CODES = {
   CUSTOMER_WRITE: "customer.write",
   CONTRACT_WRITE: "contract.write",
   BILL_MANAGE: "bill.manage",
+  BILL_APPROVE: "bill.approve",
+  RECEIVABLE_SETTLE: "receivable.settle",
   INVOICE_MANAGE: "invoice.manage",
   RECEIPT_MANAGE: "receipt.manage",
   COST_MANAGE: "cost.manage",
+  PAYABLE_SETTLE: "payable.settle",
   PAYMENT_REQUEST_CREATE: "payment_request.create",
   PAYMENT_REQUEST_APPROVE: "payment_request.approve",
   PAYMENT_PAY: "payment.pay",
@@ -59,6 +63,10 @@ export type TaxpayerType = (typeof TAXPAYER_TYPES)[keyof typeof TAXPAYER_TYPES];
 
 export const BILL_STATUSES = {
   DRAFT: "DRAFT",
+  PENDING_APPROVAL: "PENDING_APPROVAL",
+  PENDING_SETTLEMENT: "PENDING_SETTLEMENT",
+  INVOICED: "INVOICED",
+  RECEIVED: "RECEIVED",
   INTERNAL_REVIEW: "INTERNAL_REVIEW",
   FINANCE_REVIEW: "FINANCE_REVIEW",
   CUSTOMER_PENDING: "CUSTOMER_PENDING",

@@ -101,6 +101,45 @@ export class BillingController {
     return this.billing.confirmCustomer(user, id, body);
   }
 
+  @Post("bills/:id/approve")
+  @RequirePermissions(PERMISSION_CODES.BILL_APPROVE)
+  approveReceivable(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.billing.approveReceivable(user, id);
+  }
+
+  @Post("bills/:id/evidence")
+  @RequirePermissions(PERMISSION_CODES.BILL_MANAGE)
+  updateEvidenceAttachments(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.billing.updateEvidenceAttachments(user, id, body);
+  }
+
+  @Post("bills/:id/mark-invoiced")
+  @RequirePermissions(PERMISSION_CODES.RECEIVABLE_SETTLE)
+  markInvoiced(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.billing.markInvoiced(user, id, body);
+  }
+
+  @Post("bills/:id/mark-received")
+  @RequirePermissions(PERMISSION_CODES.RECEIVABLE_SETTLE)
+  markReceived(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.billing.markReceived(user, id, body);
+  }
+
   @Post("bills/:id/adjust")
   @RequirePermissions(PERMISSION_CODES.BILL_MANAGE)
   adjust(

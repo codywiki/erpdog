@@ -62,6 +62,10 @@ type AttachmentFilters = {
   ownerId?: string;
 } & PaginationQuery;
 
+type PayableFilters = {
+  status?: string;
+} & PaginationQuery;
+
 type PaymentAllocationInput = {
   payableId?: string;
   amount: Prisma.Decimal;
@@ -612,20 +616,25 @@ export class FinanceService {
     return entry;
   }
 
-  async listPayables(
-    user: AuthenticatedUser,
-    paginationQuery: PaginationQuery = {},
-  ) {
-    const where: Prisma.PayableWhereInput = { orgId: user.orgId };
+  async listPayables(user: AuthenticatedUser, filters: PayableFilters = {}) {
+    const where: Prisma.PayableWhereInput = {
+      orgId: user.orgId,
+      ...(filters.status ? { status: filters.status as PayableStatus } : {}),
+    };
     if (!user.permissions.includes(PERMISSION_CODES.CUSTOMER_READ_ALL)) {
       where.customer = { owners: { some: { userId: user.id } } };
     }
 
-    const pagination = parsePagination(paginationQuery);
+    const pagination = parsePagination(filters);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.payable.findMany({
         where,
-        include: { customer: true, category: true, paymentAllocations: true },
+        include: {
+          customer: true,
+          bill: { include: { customer: true } },
+          category: true,
+          paymentAllocations: true,
+        },
         orderBy: { createdAt: "desc" },
         skip: pagination.skip,
         take: pagination.take,
@@ -638,28 +647,37 @@ export class FinanceService {
 
   async createPayable(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
-    const customerId = optionalString(body, "customerId");
-    const periodMonth = optionalString(body, "periodMonth");
-    if (customerId) {
-      await this.customers.ensureCustomerAccess(user, customerId);
+    const billId = stringField(body, "billId");
+    const bill = await this.prisma.bill.findFirst({
+      where: { id: billId, orgId: user.orgId },
+      select: {
+        id: true,
+        customerId: true,
+        periodMonth: true,
+      },
+    });
+    if (!bill) {
+      throw new NotFoundException("Bill not found.");
     }
-    if (periodMonth) {
-      await this.periodLocks.ensureOpen(user.orgId, periodMonth);
-    }
+    await this.customers.ensureCustomerAccess(user, bill.customerId);
+    await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
+
     const categoryId = optionalString(body, "categoryId");
     await this.ensureCostCategory(user, categoryId);
 
     const payable = await this.prisma.payable.create({
       data: {
         orgId: user.orgId,
-        customerId,
+        customerId: bill.customerId,
+        billId,
         categoryId,
         vendorName: stringField(body, "vendorName"),
-        periodMonth,
+        periodMonth: bill.periodMonth,
         amount: positiveMoney(body.amount),
         dueDate: optionalDate(body, "dueDate"),
         remarks: optionalString(body, "remarks"),
       },
+      include: { customer: true, bill: true, category: true },
     });
     await this.audit.log({
       orgId: user.orgId,
@@ -670,6 +688,7 @@ export class FinanceService {
       after: {
         amount: payable.amount.toString(),
         vendorName: payable.vendorName,
+        billId,
       },
     });
     return payable;
@@ -1158,6 +1177,9 @@ export class FinanceService {
         status: {
           in: [
             "DRAFT",
+            "PENDING_APPROVAL",
+            "PENDING_SETTLEMENT",
+            "INVOICED",
             "INTERNAL_REVIEW",
             "FINANCE_REVIEW",
             "CUSTOMER_PENDING",
@@ -1733,9 +1755,13 @@ export class FinanceService {
     if (bill.status === "VOIDED") {
       throw new ConflictException("Voided bills cannot be allocated.");
     }
-    if (bill.status !== "CUSTOMER_CONFIRMED" && bill.status !== "ADJUSTED") {
+    const allocatableStatuses =
+      kind === "invoice"
+        ? ["CUSTOMER_CONFIRMED", "ADJUSTED", "PENDING_SETTLEMENT", "INVOICED"]
+        : ["CUSTOMER_CONFIRMED", "ADJUSTED", "INVOICED", "RECEIVED"];
+    if (!allocatableStatuses.includes(bill.status)) {
       throw new ConflictException(
-        "Bill must be customer confirmed before allocation.",
+        "Bill status does not allow this allocation.",
       );
     }
     await this.customers.ensureCustomerAccess(user, bill.customerId);

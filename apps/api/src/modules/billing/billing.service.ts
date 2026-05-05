@@ -8,6 +8,7 @@ import {
   BillStatus,
   ChargeSourceType,
   ContractStatus,
+  InvoiceStatus,
   ExtraChargeStatus,
   Prisma,
 } from "@prisma/client";
@@ -25,7 +26,9 @@ import {
   decimalString,
   lineTotal,
   money,
+  nonNegativeMoney,
   optionalDecimal,
+  positiveMoney,
   sum,
 } from "../../common/utils/finance";
 import {
@@ -53,6 +56,14 @@ type BillFilters = {
 type BillWithDetails = Prisma.BillGetPayload<{
   include: ReturnType<BillingService["billInclude"]>;
 }>;
+
+const cooperationModeOptions = new Set([
+  "一口价投放",
+  "代结算",
+  "CPA",
+  "CPS",
+  "其他",
+]);
 
 @Injectable()
 export class BillingService {
@@ -273,6 +284,10 @@ export class BillingService {
 
   async createManualBill(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
+    if (arrayField<Payload>(body, "settlements").length > 0) {
+      return this.createReceivableBill(user, body);
+    }
+
     const customerId = stringField(body, "customerId");
     const periodMonth = stringField(body, "periodMonth");
     await this.customers.ensureCustomerAccess(user, customerId);
@@ -349,6 +364,173 @@ export class BillingService {
     });
 
     return this.presentBill(bill);
+  }
+
+  private async createReceivableBill(user: AuthenticatedUser, body: Payload) {
+    const customerId = stringField(body, "customerId");
+    const contractId = stringField(body, "contractId");
+    const periodMonth = stringField(body, "periodMonth");
+    await this.customers.ensureCustomerAccess(user, customerId);
+    await this.periodLocks.ensureOpen(user.orgId, periodMonth);
+
+    const contract = await this.prisma.contract.findFirst({
+      where: { id: contractId, orgId: user.orgId, customerId },
+      select: {
+        id: true,
+        code: true,
+        serviceFeeRate: true,
+      },
+    });
+    if (!contract) {
+      throw new NotFoundException("Contract not found for customer.");
+    }
+
+    const serviceFeeRate = new Prisma.Decimal(contract.serviceFeeRate ?? 0);
+    const settlementInputs = arrayField<Payload>(body, "settlements");
+    if (!settlementInputs.length) {
+      throw new BadRequestException("settlements is required.");
+    }
+
+    const settlements = settlementInputs.map((settlement, settlementIndex) => {
+      const detailInputs =
+        arrayField<Payload>(settlement, "details").length > 0
+          ? arrayField<Payload>(settlement, "details")
+          : arrayField<Payload>(settlement, "items");
+      if (!detailInputs.length) {
+        throw new BadRequestException(
+          `settlements[${settlementIndex}].details is required.`,
+        );
+      }
+
+      const items = detailInputs.map((detail, detailIndex) => {
+        const cooperationFee = positiveMoney(
+          detail.cooperationFee,
+          "cooperationFee",
+        );
+        const serviceFee = cooperationFee
+          .mul(serviceFeeRate)
+          .div(100)
+          .toDecimalPlaces(2);
+        const totalFee = cooperationFee.plus(serviceFee).toDecimalPlaces(2);
+        const cooperationModes = this.cooperationModes(detail, detailIndex);
+        return {
+          customerContactName: stringField(detail, "customerContactName"),
+          projectName: stringField(detail, "projectName"),
+          periodMonth: optionalString(detail, "periodMonth") ?? periodMonth,
+          cooperationModes,
+          otherModeNote: cooperationModes.includes("其他")
+            ? stringField(detail, "otherModeNote")
+            : optionalString(detail, "otherModeNote"),
+          cooperationFee,
+          serviceFee,
+          totalFee,
+        };
+      });
+
+      return {
+        title:
+          optionalString(settlement, "title") ??
+          `子结算 ${settlementIndex + 1}`,
+        sortOrder: settlementIndex,
+        items,
+      };
+    });
+
+    const totalAmount = sum(
+      settlements.flatMap((settlement) =>
+        settlement.items.map((item) => item.totalFee),
+      ),
+    );
+    if (!totalAmount.greaterThan(0)) {
+      throw new BadRequestException(
+        "Bill total amount must be greater than 0.",
+      );
+    }
+
+    const created = await this.prisma.$transaction(
+      async (tx) =>
+        tx.bill.create({
+          data: {
+            orgId: user.orgId,
+            customerId,
+            contractId,
+            billNo:
+              optionalString(body, "billNo") ??
+              `AR-${periodMonth}-${Date.now().toString(36).toUpperCase()}`,
+            periodMonth,
+            status: BillStatus.PENDING_APPROVAL,
+            approvalRequestedAt: new Date(),
+            dueDate: optionalDate(body, "dueDate"),
+            subtotal: totalAmount,
+            totalAmount,
+            items: {
+              create: settlements.flatMap((settlement) =>
+                settlement.items.map((item) => ({
+                  sourceType: ChargeSourceType.MANUAL,
+                  name: item.projectName,
+                  description: [
+                    `客户对接人：${item.customerContactName}`,
+                    `合作模式：${item.cooperationModes.join("、")}`,
+                    item.otherModeNote ? `其他备注：${item.otherModeNote}` : "",
+                    `合作费用 ${item.cooperationFee.toFixed(2)}，服务费 ${item.serviceFee.toFixed(2)}`,
+                  ]
+                    .filter(Boolean)
+                    .join("；"),
+                  amount: item.totalFee,
+                  quantity: new Prisma.Decimal(1),
+                  lineTotal: item.totalFee,
+                })),
+              ),
+            },
+            settlements: {
+              create: settlements.map((settlement) => ({
+                title: settlement.title,
+                sortOrder: settlement.sortOrder,
+                items: {
+                  create: settlement.items.map((item) => ({
+                    customerContactName: item.customerContactName,
+                    projectName: item.projectName,
+                    periodMonth: item.periodMonth,
+                    cooperationModes:
+                      item.cooperationModes as Prisma.InputJsonValue,
+                    otherModeNote: item.otherModeNote,
+                    cooperationFee: item.cooperationFee,
+                    serviceFee: item.serviceFee,
+                    totalFee: item.totalFee,
+                  })),
+                },
+              })),
+            },
+            statusEvents: {
+              create: {
+                toStatus: BillStatus.PENDING_APPROVAL,
+                note: "Receivable bill submitted for owner approval.",
+                actorUserId: user.id,
+              },
+            },
+          },
+          include: this.billInclude(),
+        }),
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "bill.receivable_create",
+      entityType: "bill",
+      entityId: created.id,
+      after: {
+        billNo: created.billNo,
+        periodMonth,
+        totalAmount: totalAmount.toString(),
+        status: created.status,
+      },
+    });
+
+    return this.presentBill(created);
   }
 
   async transition(
@@ -452,6 +634,322 @@ export class BillingService {
       entityId: billId,
       before: { status: bill.status },
       after: { status: updated.status, confirmedBy: confirmedByName },
+    });
+
+    return this.presentBill(updated);
+  }
+
+  async approveReceivable(user: AuthenticatedUser, billId: string) {
+    const bill = await this.prisma.bill.findFirst({
+      where: { id: billId, orgId: user.orgId },
+    });
+    if (!bill) {
+      throw new NotFoundException("Bill not found.");
+    }
+    await this.customers.ensureCustomerAccess(user, bill.customerId);
+    const evidenceAttachmentIds = this.jsonStringArray(
+      bill.evidenceAttachmentIds,
+    );
+    if (!evidenceAttachmentIds.length) {
+      throw new BadRequestException(
+        "Evidence attachments are required before approval.",
+      );
+    }
+    await this.ensureBillAttachments(
+      this.prisma,
+      user.orgId,
+      billId,
+      evidenceAttachmentIds,
+      "evidenceAttachmentIds",
+    );
+    await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
+    this.ensureTransitionAllowed(bill.status, BillStatus.PENDING_SETTLEMENT);
+
+    const updated = await this.prisma.bill.update({
+      where: { id: billId },
+      data: {
+        status: BillStatus.PENDING_SETTLEMENT,
+        approvedAt: new Date(),
+        approvedById: user.id,
+        statusEvents: {
+          create: {
+            fromStatus: bill.status,
+            toStatus: BillStatus.PENDING_SETTLEMENT,
+            note: "Owner approved receivable bill.",
+            actorUserId: user.id,
+          },
+        },
+      },
+      include: this.billInclude(),
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "bill.receivable_approve",
+      entityType: "bill",
+      entityId: billId,
+      before: { status: bill.status },
+      after: { status: updated.status },
+    });
+
+    return this.presentBill(updated);
+  }
+
+  async updateEvidenceAttachments(
+    user: AuthenticatedUser,
+    billId: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const evidenceAttachmentIds = this.attachmentIds(body, "attachmentIds");
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const bill = await tx.bill.findFirst({
+        where: { id: billId, orgId: user.orgId },
+      });
+      if (!bill) {
+        throw new NotFoundException("Bill not found.");
+      }
+      await this.customers.ensureCustomerAccess(user, bill.customerId);
+      await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
+      if (bill.status !== BillStatus.PENDING_APPROVAL) {
+        throw new ConflictException(
+          "Evidence attachments can only be changed while pending approval.",
+        );
+      }
+      await this.ensureBillAttachments(
+        tx,
+        user.orgId,
+        billId,
+        evidenceAttachmentIds,
+        "attachmentIds",
+      );
+
+      return tx.bill.update({
+        where: { id: billId },
+        data: { evidenceAttachmentIds },
+        include: this.billInclude(),
+      });
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "bill.evidence_update",
+      entityType: "bill",
+      entityId: billId,
+      after: { evidenceAttachmentIds },
+    });
+
+    return this.presentBill(updated);
+  }
+
+  async markInvoiced(
+    user: AuthenticatedUser,
+    billId: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const invoiceAttachmentIds = this.attachmentIds(
+      body,
+      "invoiceAttachmentIds",
+    );
+    if (!invoiceAttachmentIds.length) {
+      throw new BadRequestException("invoiceAttachmentIds is required.");
+    }
+
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+        const bill = await tx.bill.findFirst({
+          where: { id: billId, orgId: user.orgId },
+          include: {
+            invoiceAllocations: { include: { invoice: true } },
+          },
+        });
+        if (!bill) {
+          throw new NotFoundException("Bill not found.");
+        }
+        await this.customers.ensureCustomerAccess(user, bill.customerId);
+        await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
+        this.ensureTransitionAllowed(bill.status, BillStatus.INVOICED);
+        await this.ensureBillAttachments(
+          tx,
+          user.orgId,
+          billId,
+          invoiceAttachmentIds,
+          "invoiceAttachmentIds",
+        );
+
+        const invoiceAmount = sum(
+          bill.invoiceAllocations
+            .filter((allocation) => allocation.invoice.status !== "VOIDED")
+            .map((allocation) => allocation.amount),
+        );
+        const amount = new Prisma.Decimal(bill.totalAmount).minus(
+          invoiceAmount,
+        );
+        if (!amount.greaterThan(0)) {
+          throw new ConflictException("Bill is already fully invoiced.");
+        }
+
+        await tx.invoice.create({
+          data: {
+            orgId: user.orgId,
+            invoiceNo:
+              optionalString(body, "invoiceNo") ??
+              `INV-${bill.billNo}-${Date.now().toString(36).toUpperCase()}`,
+            invoiceType: stringField(body, "invoiceType", "增值税普通发票"),
+            status: InvoiceStatus.ISSUED,
+            issueDate: optionalDate(body, "issueDate") ?? new Date(),
+            amount,
+            taxAmount:
+              body.taxAmount === undefined
+                ? new Prisma.Decimal(0)
+                : nonNegativeMoney(body.taxAmount, "taxAmount"),
+            remarks: optionalString(body, "remarks"),
+            fileAttachmentId: invoiceAttachmentIds[0],
+            allocations: {
+              create: {
+                billId,
+                amount,
+              },
+            },
+          },
+        });
+
+        return tx.bill.update({
+          where: { id: billId },
+          data: {
+            status: BillStatus.INVOICED,
+            invoiceAttachmentIds,
+            statusEvents: {
+              create: {
+                fromStatus: bill.status,
+                toStatus: BillStatus.INVOICED,
+                note: "Invoice source file uploaded.",
+                actorUserId: user.id,
+              },
+            },
+          },
+          include: this.billInclude(),
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "bill.receivable_invoiced",
+      entityType: "bill",
+      entityId: billId,
+      after: { status: updated.status, invoiceAttachmentIds },
+    });
+
+    return this.presentBill(updated);
+  }
+
+  async markReceived(
+    user: AuthenticatedUser,
+    billId: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const receiptAttachmentIds = this.attachmentIds(
+      body,
+      "receiptAttachmentIds",
+    );
+    if (!receiptAttachmentIds.length) {
+      throw new BadRequestException("receiptAttachmentIds is required.");
+    }
+
+    const updated = await this.prisma.$transaction(
+      async (tx) => {
+        const bill = await tx.bill.findFirst({
+          where: { id: billId, orgId: user.orgId },
+          include: {
+            receiptAllocations: { include: { receipt: true } },
+          },
+        });
+        if (!bill) {
+          throw new NotFoundException("Bill not found.");
+        }
+        await this.customers.ensureCustomerAccess(user, bill.customerId);
+        await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
+        this.ensureTransitionAllowed(bill.status, BillStatus.RECEIVED);
+        await this.ensureBillAttachments(
+          tx,
+          user.orgId,
+          billId,
+          receiptAttachmentIds,
+          "receiptAttachmentIds",
+        );
+
+        const receiptAmount = sum(
+          bill.receiptAllocations
+            .filter((allocation) => allocation.receipt.status !== "REVERSED")
+            .map((allocation) => allocation.amount),
+        );
+        const amount = new Prisma.Decimal(bill.totalAmount).minus(
+          receiptAmount,
+        );
+        if (!amount.greaterThan(0)) {
+          throw new ConflictException("Bill is already fully received.");
+        }
+
+        await tx.receipt.create({
+          data: {
+            orgId: user.orgId,
+            receiptNo:
+              optionalString(body, "receiptNo") ??
+              `RCPT-${bill.billNo}-${Date.now().toString(36).toUpperCase()}`,
+            receivedAt: optionalDate(body, "receivedAt") ?? new Date(),
+            amount,
+            account: stringField(body, "account", "默认收款账户"),
+            payer: optionalString(body, "payer"),
+            remarks: optionalString(body, "remarks"),
+            attachmentId: receiptAttachmentIds[0],
+            allocations: {
+              create: {
+                billId,
+                amount,
+              },
+            },
+          },
+        });
+
+        return tx.bill.update({
+          where: { id: billId },
+          data: {
+            status: BillStatus.RECEIVED,
+            receiptAttachmentIds,
+            confirmedAt: new Date(),
+            statusEvents: {
+              create: {
+                fromStatus: bill.status,
+                toStatus: BillStatus.RECEIVED,
+                note: "Bank receipt proof uploaded.",
+                actorUserId: user.id,
+              },
+            },
+          },
+          include: this.billInclude(),
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "bill.receivable_received",
+      entityType: "bill",
+      entityId: billId,
+      after: { status: updated.status, receiptAttachmentIds },
     });
 
     return this.presentBill(updated);
@@ -574,6 +1072,10 @@ export class BillingService {
         BillStatus.CUSTOMER_PENDING,
         BillStatus.VOIDED,
       ],
+      PENDING_APPROVAL: [BillStatus.PENDING_SETTLEMENT, BillStatus.VOIDED],
+      PENDING_SETTLEMENT: [BillStatus.INVOICED, BillStatus.VOIDED],
+      INVOICED: [BillStatus.RECEIVED],
+      RECEIVED: [BillStatus.CLOSED],
       INTERNAL_REVIEW: [BillStatus.FINANCE_REVIEW, BillStatus.VOIDED],
       FINANCE_REVIEW: [BillStatus.CUSTOMER_PENDING, BillStatus.VOIDED],
       CUSTOMER_PENDING: [BillStatus.CUSTOMER_CONFIRMED, BillStatus.VOIDED],
@@ -621,6 +1123,25 @@ export class BillingService {
       totalAmount: decimalString(total),
       subtotal: decimalString(bill.subtotal),
       adjustmentTotal: decimalString(bill.adjustmentTotal),
+      evidenceAttachmentIds: this.jsonStringArray(bill.evidenceAttachmentIds),
+      invoiceAttachmentIds: this.jsonStringArray(bill.invoiceAttachmentIds),
+      receiptAttachmentIds: this.jsonStringArray(bill.receiptAttachmentIds),
+      items: bill.items.map((item) => ({
+        ...item,
+        amount: decimalString(item.amount),
+        quantity: new Prisma.Decimal(item.quantity).toFixed(4),
+        lineTotal: decimalString(item.lineTotal),
+      })),
+      settlements: bill.settlements.map((settlement) => ({
+        ...settlement,
+        items: settlement.items.map((item) => ({
+          ...item,
+          cooperationModes: this.jsonStringArray(item.cooperationModes),
+          cooperationFee: decimalString(item.cooperationFee),
+          serviceFee: decimalString(item.serviceFee),
+          totalFee: decimalString(item.totalFee),
+        })),
+      })),
       invoiceAmount: decimalString(invoiceAmount),
       uninvoicedAmount: decimalString(total.minus(invoiceAmount)),
       receiptAmount: decimalString(receiptAmount),
@@ -640,14 +1161,90 @@ export class BillingService {
 
   private billInclude() {
     return {
-      customer: { select: { id: true, code: true, name: true } },
+      customer: {
+        select: { id: true, code: true, name: true, fullName: true },
+      },
       contract: { select: { id: true, code: true, name: true } },
       items: { orderBy: { createdAt: "asc" } },
+      settlements: {
+        orderBy: { sortOrder: "asc" },
+        include: { items: { orderBy: { createdAt: "asc" } } },
+      },
       confirmations: { orderBy: { confirmedAt: "desc" } },
       adjustments: { orderBy: { createdAt: "desc" } },
       statusEvents: { orderBy: { createdAt: "asc" } },
       invoiceAllocations: { include: { invoice: true } },
       receiptAllocations: { include: { receipt: true } },
     } satisfies Prisma.BillInclude;
+  }
+
+  private cooperationModes(detail: Payload, detailIndex: number) {
+    const modes = Array.from(
+      new Set(
+        arrayField<unknown>(detail, "cooperationModes")
+          .map((mode) => (typeof mode === "string" ? mode.trim() : ""))
+          .filter(Boolean),
+      ),
+    );
+    if (!modes.length) {
+      throw new BadRequestException(
+        `settlement detail ${detailIndex + 1} cooperationModes is required.`,
+      );
+    }
+    const invalid = modes.find((mode) => !cooperationModeOptions.has(mode));
+    if (invalid) {
+      throw new BadRequestException(`Invalid cooperation mode: ${invalid}.`);
+    }
+    if (modes.includes("其他") && !optionalString(detail, "otherModeNote")) {
+      throw new BadRequestException("otherModeNote is required.");
+    }
+    return modes;
+  }
+
+  private attachmentIds(body: Payload, field = "attachmentIds") {
+    return Array.from(
+      new Set(
+        arrayField<unknown>(body, field)
+          .map((id) => (typeof id === "string" ? id.trim() : ""))
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private async ensureBillAttachments(
+    client: Pick<Prisma.TransactionClient, "attachment">,
+    orgId: string,
+    billId: string,
+    attachmentIds: string[],
+    fieldName: string,
+  ) {
+    if (!attachmentIds.length) {
+      throw new BadRequestException(`${fieldName} is required.`);
+    }
+
+    const attachments = await client.attachment.findMany({
+      where: { orgId, id: { in: attachmentIds } },
+      select: { id: true, ownerType: true, ownerId: true },
+    });
+    const validIds = new Set(
+      attachments
+        .filter(
+          (attachment) =>
+            attachment.ownerType === "bill" && attachment.ownerId === billId,
+        )
+        .map((attachment) => attachment.id),
+    );
+
+    if (validIds.size !== attachmentIds.length) {
+      throw new BadRequestException(
+        `${fieldName} must be uploaded to this bill.`,
+      );
+    }
+  }
+
+  private jsonStringArray(value: unknown) {
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
   }
 }

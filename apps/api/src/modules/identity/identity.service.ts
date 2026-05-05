@@ -1,12 +1,17 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 
-import type { AuthenticatedUser } from "@erpdog/contracts";
+import {
+  PERMISSION_CODES,
+  ROLE_CODES,
+  type AuthenticatedUser,
+} from "@erpdog/contracts";
 
 import { PrismaService } from "../../common/prisma/prisma.service";
 import {
@@ -40,6 +45,31 @@ const userInclude = {
     },
   },
 } satisfies Prisma.UserInclude;
+
+const ownerManagedRoleCodes: Set<string> = new Set([
+  ROLE_CODES.BUSINESS_OWNER,
+  ROLE_CODES.CUSTOMER_MANAGER,
+  ROLE_CODES.FINANCE,
+]);
+
+const ownerGrantablePermissionCodes: Set<string> = new Set([
+  PERMISSION_CODES.CUSTOMER_READ_ALL,
+  PERMISSION_CODES.CUSTOMER_READ_OWN,
+  PERMISSION_CODES.CUSTOMER_WRITE,
+  PERMISSION_CODES.CONTRACT_WRITE,
+  PERMISSION_CODES.BILL_MANAGE,
+  PERMISSION_CODES.BILL_APPROVE,
+  PERMISSION_CODES.RECEIVABLE_SETTLE,
+  PERMISSION_CODES.INVOICE_MANAGE,
+  PERMISSION_CODES.RECEIPT_MANAGE,
+  PERMISSION_CODES.COST_MANAGE,
+  PERMISSION_CODES.PAYABLE_SETTLE,
+  PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
+  PERMISSION_CODES.PAYMENT_REQUEST_APPROVE,
+  PERMISSION_CODES.PAYMENT_PAY,
+  PERMISSION_CODES.PERIOD_CLOSE,
+  PERMISSION_CODES.REPORT_VIEW,
+]);
 
 type UserWithRoles = Prisma.UserGetPayload<{
   include: typeof userInclude;
@@ -83,6 +113,7 @@ export class IdentityService {
     }
 
     const roleCodes = this.roleCodes(body);
+    this.ensureRoleManagementAccess(user, roleCodes);
     const password = stringField(body, "password");
     this.ensurePassword(password);
     const created = await this.prisma.$transaction(async (tx) => {
@@ -149,6 +180,10 @@ export class IdentityService {
     }
 
     const roleCodes = hasRoleUpdate ? this.roleCodes(body) : [];
+    if (hasRoleUpdate) {
+      this.ensureRoleManagementAccess(user, roleCodes);
+      this.ensureRoleManagementAccess(user, this.roleCodesForUser(before));
+    }
     const nextIsActive = booleanField(body, "isActive", before.isActive);
     if (id === user.id && !nextIsActive) {
       throw new ConflictException("You cannot deactivate your own account.");
@@ -217,6 +252,78 @@ export class IdentityService {
     });
   }
 
+  async updateRolePermissions(
+    user: AuthenticatedUser,
+    roleId: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const before = await this.prisma.role.findFirst({
+      where: { id: roleId, orgId: user.orgId },
+      include: {
+        permissions: {
+          include: { permission: true },
+        },
+      },
+    });
+    if (!before) {
+      throw new NotFoundException("Role not found.");
+    }
+
+    this.ensureRoleManagementAccess(user, [before.code]);
+    const permissionCodes = this.permissionCodes(body);
+    this.ensureGrantablePermissions(user, permissionCodes);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const permissions = await tx.permission.findMany({
+        where: { code: { in: permissionCodes } },
+      });
+      if (permissions.length !== permissionCodes.length) {
+        throw new BadRequestException("One or more permissions are invalid.");
+      }
+
+      await tx.rolePermission.deleteMany({ where: { roleId } });
+      if (permissions.length) {
+        await tx.rolePermission.createMany({
+          data: permissions.map((permission) => ({
+            roleId,
+            permissionId: permission.id,
+          })),
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          orgId: user.orgId,
+          actorUserId: user.id,
+          action: "role.permissions_update",
+          entityType: "role",
+          entityId: roleId,
+          before: {
+            code: before.code,
+            permissions: before.permissions.map((item) => item.permission.code),
+          },
+          after: {
+            code: before.code,
+            permissions: permissionCodes,
+          },
+        },
+      });
+
+      return tx.role.findUniqueOrThrow({
+        where: { id: roleId },
+        include: {
+          permissions: {
+            include: { permission: true },
+            orderBy: { permission: { code: "asc" } },
+          },
+        },
+      });
+    });
+
+    return updated;
+  }
+
   async listAuditLogs(
     user: AuthenticatedUser,
     filters: {
@@ -261,6 +368,50 @@ export class IdentityService {
     }
 
     return roleCodes;
+  }
+
+  private permissionCodes(body: Payload) {
+    return Array.from(
+      new Set(
+        arrayField<unknown>(body, "permissionCodes")
+          .map((code) => (typeof code === "string" ? code.trim() : ""))
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private ensureRoleManagementAccess(
+    user: AuthenticatedUser,
+    roleCodes: string[],
+  ) {
+    if (user.roles.includes(ROLE_CODES.ADMIN)) {
+      return;
+    }
+    if (
+      user.roles.includes(ROLE_CODES.OWNER) &&
+      roleCodes.every((code) => ownerManagedRoleCodes.has(code))
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException("You cannot manage this role.");
+  }
+
+  private ensureGrantablePermissions(
+    user: AuthenticatedUser,
+    permissionCodes: string[],
+  ) {
+    if (user.roles.includes(ROLE_CODES.ADMIN)) {
+      return;
+    }
+    if (
+      user.roles.includes(ROLE_CODES.OWNER) &&
+      permissionCodes.every((code) => ownerGrantablePermissionCodes.has(code))
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException("You cannot grant one or more permissions.");
   }
 
   private ensureEmail(email: string) {

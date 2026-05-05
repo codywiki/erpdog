@@ -54,6 +54,16 @@ export class IdentityController {
     return this.identity.listRoles(user);
   }
 
+  @Patch("identity/roles/:id/permissions")
+  @RequirePermissions(PERMISSION_CODES.USER_MANAGE)
+  updateRolePermissions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.identity.updateRolePermissions(user, id, body);
+  }
+
   @Get("audit-logs")
   @RequirePermissions(PERMISSION_CODES.AUDIT_VIEW)
   listAuditLogs(

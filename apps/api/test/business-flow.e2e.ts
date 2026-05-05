@@ -371,6 +371,274 @@ async function main() {
       "Imported contract did not link the signing entity.",
     );
 
+    const receivablePeriodMonth = "2026-05";
+    const receivableBill = await request<{
+      id: string;
+      status: string;
+      totalAmount: string;
+      settlements: Array<{
+        items: Array<{
+          cooperationFee: string;
+          serviceFee: string;
+          totalFee: string;
+        }>;
+      }>;
+    }>(client, "/bills", {
+      method: "POST",
+      body: {
+        customerId,
+        contractId,
+        periodMonth: receivablePeriodMonth,
+        settlements: [
+          {
+            title: "E2E 子结算",
+            details: [
+              {
+                customerContactName: "E2E 客户对接人",
+                projectName: "E2E 项目",
+                periodMonth: receivablePeriodMonth,
+                cooperationModes: ["一口价投放", "CPA"],
+                cooperationFee: "1000.00",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    assert(
+      receivableBill.status === "PENDING_APPROVAL",
+      "Receivable bill should start pending approval.",
+    );
+    assert(
+      receivableBill.settlements[0]?.items[0]?.totalFee === "1000.00",
+      "Receivable settlement total was not calculated.",
+    );
+    await expectStatus(client, `/bills/${receivableBill.id}/approve`, 400, {
+      method: "POST",
+    });
+
+    const wrongEvidenceAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "customer",
+          ownerId: customerId,
+          fileName: "wrong-settlement-confirmation.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/wrong-settlement-confirmation.png",
+        },
+      },
+    );
+    await expectStatus(client, `/bills/${receivableBill.id}/evidence`, 400, {
+      method: "POST",
+      body: { attachmentIds: [wrongEvidenceAttachment.id] },
+    });
+
+    const evidenceAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "bill",
+          ownerId: receivableBill.id,
+          fileName: "settlement-confirmation.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/settlement-confirmation.png",
+        },
+      },
+    );
+    await request(client, `/bills/${receivableBill.id}/evidence`, {
+      method: "POST",
+      body: { attachmentIds: [evidenceAttachment.id] },
+    });
+
+    const approvedReceivable = await request<{ status: string }>(
+      client,
+      `/bills/${receivableBill.id}/approve`,
+      { method: "POST" },
+    );
+    assert(
+      approvedReceivable.status === "PENDING_SETTLEMENT",
+      "Receivable bill was not approved into settlement.",
+    );
+    await expectStatus(client, `/bills/${receivableBill.id}/evidence`, 409, {
+      method: "POST",
+      body: { attachmentIds: [evidenceAttachment.id] },
+    });
+    const wrongInvoiceAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "customer",
+          ownerId: customerId,
+          fileName: "wrong-invoice-source.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 128,
+          url: "https://example.com/wrong-invoice-source.pdf",
+        },
+      },
+    );
+    await expectStatus(
+      client,
+      `/bills/${receivableBill.id}/mark-invoiced`,
+      400,
+      {
+        method: "POST",
+        body: { invoiceAttachmentIds: [wrongInvoiceAttachment.id] },
+      },
+    );
+    await expectStatus(
+      client,
+      `/bills/${receivableBill.id}/mark-invoiced`,
+      400,
+      {
+        method: "POST",
+        body: { invoiceAttachmentIds: [] },
+      },
+    );
+    const invoiceAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "bill",
+          ownerId: receivableBill.id,
+          fileName: "invoice-source.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 128,
+          url: "https://example.com/invoice-source.pdf",
+        },
+      },
+    );
+    const invoicedReceivable = await request<{
+      status: string;
+      invoiceAmount: string;
+    }>(client, `/bills/${receivableBill.id}/mark-invoiced`, {
+      method: "POST",
+      body: { invoiceAttachmentIds: [invoiceAttachment.id] },
+    });
+    assert(
+      invoicedReceivable.status === "INVOICED" &&
+        invoicedReceivable.invoiceAmount === receivableBill.totalAmount,
+      "Receivable bill was not marked fully invoiced.",
+    );
+    const wrongReceiptAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "customer",
+          ownerId: customerId,
+          fileName: "wrong-receipt-proof.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/wrong-receipt-proof.png",
+        },
+      },
+    );
+    await expectStatus(
+      client,
+      `/bills/${receivableBill.id}/mark-received`,
+      400,
+      {
+        method: "POST",
+        body: { receiptAttachmentIds: [wrongReceiptAttachment.id] },
+      },
+    );
+    const receiptAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "bill",
+          ownerId: receivableBill.id,
+          fileName: "receipt-proof.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/receipt-proof.png",
+        },
+      },
+    );
+    const receivedReceivable = await request<{
+      status: string;
+      receiptAmount: string;
+    }>(client, `/bills/${receivableBill.id}/mark-received`, {
+      method: "POST",
+      body: {
+        receiptAttachmentIds: [receiptAttachment.id],
+        account: "E2E 收款账户",
+      },
+    });
+    assert(
+      receivedReceivable.status === "RECEIVED" &&
+        receivedReceivable.receiptAmount === receivableBill.totalAmount,
+      "Receivable bill was not marked fully received.",
+    );
+
+    const linkedPayable = await request<{ id: string; billId?: string }>(
+      client,
+      "/payables",
+      {
+        method: "POST",
+        body: {
+          billId: receivableBill.id,
+          vendorName: "E2E 账单关联供应商",
+          amount: "250.00",
+          remarks: "E2E bill-linked payable",
+        },
+      },
+    );
+    assert(
+      linkedPayable.billId === receivableBill.id,
+      "Payable did not link to receivable bill.",
+    );
+    const payableAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "payable",
+          ownerId: linkedPayable.id,
+          fileName: "payable-proof.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/payable-proof.png",
+        },
+      },
+    );
+    await request(client, "/payments", {
+      method: "POST",
+      body: {
+        paidAt: "2026-05-31",
+        amount: "250.00",
+        account: "E2E 付款账户",
+        payeeName: "E2E 账单关联供应商",
+        attachmentId: payableAttachment.id,
+        allocations: [{ payableId: linkedPayable.id, amount: "250.00" }],
+      },
+    });
+    const paidPayables = await request<{
+      items: Array<{ id: string; status: string }>;
+    }>(client, "/payables?status=PAID&pageSize=20");
+    assert(
+      paidPayables.items.some(
+        (payable) =>
+          payable.id === linkedPayable.id && payable.status === "PAID",
+      ),
+      "Linked payable was not marked paid.",
+    );
+
     const businessPeriodMonth = "2026-03";
     const businessBill = await request<{
       id: string;
