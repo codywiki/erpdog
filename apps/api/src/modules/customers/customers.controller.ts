@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -84,6 +85,12 @@ export class CustomersController {
     @Body() body: Payload,
   ) {
     return this.customers.update(user, id, body);
+  }
+
+  @Delete(":id")
+  @RequirePermissions(PERMISSION_CODES.CUSTOMER_WRITE)
+  remove(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
+    return this.customers.remove(user, id);
   }
 
   @Post(":id/owners")

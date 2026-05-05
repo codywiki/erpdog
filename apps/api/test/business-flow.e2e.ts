@@ -315,7 +315,81 @@ async function main() {
       },
     });
 
+    const deletableCustomer = await request<{ id: string }>(
+      client,
+      "/customers",
+      {
+        method: "POST",
+        body: {
+          name: `E2E 待删除客户 ${runId}`,
+          fullName: `E2E 待删除客户有限公司 ${runId}`,
+        },
+      },
+    );
+    await request(client, `/customers/${deletableCustomer.id}`, {
+      method: "DELETE",
+    });
+    await expectStatus(client, `/customers/${deletableCustomer.id}`, 404);
+
+    await expectStatus(client, "/contracts", 400, {
+      method: "POST",
+      body: {
+        customerId,
+        signingEntityId: signingEntity.id,
+        startDate: "2026-01-01",
+        baseFee: "1000.00",
+        incentiveUnitPrice: "0.00",
+        serviceFeeRate: "0",
+      },
+    });
+    const deletableContractAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          fileName: "deletable-contract.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 1024,
+          url: "https://example.com/deletable-contract.pdf",
+        },
+      },
+    );
+    const deletableContract = await request<{ id: string }>(
+      client,
+      "/contracts",
+      {
+        method: "POST",
+        body: {
+          customerId,
+          signingEntityId: signingEntity.id,
+          startDate: "2026-01-01",
+          baseFee: "1000.00",
+          incentiveUnitPrice: "0.00",
+          serviceFeeRate: "0",
+          attachmentIds: [deletableContractAttachment.id],
+        },
+      },
+    );
+    await request(client, `/contracts/${deletableContract.id}`, {
+      method: "DELETE",
+    });
+    await expectStatus(client, `/contracts/${deletableContract.id}`, 404);
+
     await request(client, "/contracts/import-template");
+    const contractAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          fileName: "e2e-service-contract.pdf",
+          contentType: "application/pdf",
+          sizeBytes: 1024,
+          url: "https://example.com/e2e-service-contract.pdf",
+        },
+      },
+    );
     const contractImport = await request<{
       succeeded: number;
       results: Array<{ id?: string; error?: string }>;
@@ -328,6 +402,7 @@ async function main() {
             "合同名称",
             "客户编码",
             "签约主体编号",
+            "合同附件ID",
             "状态",
             "开始日期",
             "账期日",
@@ -342,6 +417,7 @@ async function main() {
               合同名称: "E2E 服务合同",
               客户编码: customerCode,
               签约主体编号: signingEntity.code,
+              合同附件ID: contractAttachment.id,
               状态: "ACTIVE",
               开始日期: "2026-01-01",
               账期日: 1,
@@ -355,7 +431,10 @@ async function main() {
         ),
       },
     });
-    assert(contractImport.succeeded === 1, "Contract Excel import failed.");
+    assert(
+      contractImport.succeeded === 1,
+      `Contract Excel import failed: ${JSON.stringify(contractImport.results)}`,
+    );
     const contractId = contractImport.results[0]?.id;
     assert(contractId, "Imported contract id missing.");
     const importedContract = await request<{
@@ -566,22 +645,82 @@ async function main() {
       "Receivable bill was not marked fully received.",
     );
 
-    const linkedPayable = await request<{ id: string; billId?: string }>(
-      client,
-      "/payables",
-      {
-        method: "POST",
-        body: {
-          billId: receivableBill.id,
-          vendorName: "E2E 账单关联供应商",
-          amount: "250.00",
-          remarks: "E2E bill-linked payable",
-        },
+    const paymentRecipient = await request<{
+      id: string;
+      name: string;
+      accountName: string;
+      accountNo: string;
+    }>(client, "/payment-recipients", {
+      method: "POST",
+      body: {
+        name: "E2E 账单关联供应商",
+        platform: "CORPORATE_BANK",
+        accountName: "E2E 供应商账户",
+        accountNo: "622200000001",
+        bankBranch: "E2E 支行",
       },
-    );
+    });
+    const linkedPayable = await request<{
+      id: string;
+      billId?: string;
+      vendorName: string;
+      receiptAccountName?: string;
+      receiptAccountNo?: string;
+    }>(client, "/payables", {
+      method: "POST",
+      body: {
+        billId: receivableBill.id,
+        paymentRecipientId: paymentRecipient.id,
+        amount: "250.00",
+        remarks: "E2E bill-linked payable",
+      },
+    });
     assert(
       linkedPayable.billId === receivableBill.id,
       "Payable did not link to receivable bill.",
+    );
+    assert(
+      linkedPayable.vendorName === paymentRecipient.name &&
+        linkedPayable.receiptAccountName === paymentRecipient.accountName &&
+        linkedPayable.receiptAccountNo === paymentRecipient.accountNo,
+      "Payable did not snapshot the selected recipient account.",
+    );
+    await expectStatus(client, "/payments", 400, {
+      method: "POST",
+      body: {
+        paidAt: "2026-05-31",
+        amount: "250.00",
+        account: "E2E 付款账户",
+        payeeName: paymentRecipient.name,
+        allocations: [{ payableId: linkedPayable.id, amount: "250.00" }],
+      },
+    });
+    const payableConfirmAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "payable",
+          ownerId: linkedPayable.id,
+          fileName: "payable-confirmation.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/payable-confirmation.png",
+        },
+      },
+    );
+    const confirmedPayable = await request<{ status: string }>(
+      client,
+      `/payables/${linkedPayable.id}/confirm`,
+      {
+        method: "POST",
+        body: { attachmentIds: [payableConfirmAttachment.id] },
+      },
+    );
+    assert(
+      confirmedPayable.status === "CONFIRMED",
+      "Payable was not confirmed before payment.",
     );
     const payableAttachment = await request<{ id: string }>(
       client,
@@ -604,7 +743,7 @@ async function main() {
         paidAt: "2026-05-31",
         amount: "250.00",
         account: "E2E 付款账户",
-        payeeName: "E2E 账单关联供应商",
+        payeeName: paymentRecipient.name,
         attachmentId: payableAttachment.id,
         allocations: [{ payableId: linkedPayable.id, amount: "250.00" }],
       },
@@ -868,6 +1007,25 @@ async function main() {
     );
     const payableId = costEntry.payables[0]?.id;
     assert(payableId, "Payable was not created from cost entry.");
+    const costPayableConfirmAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "payable",
+          ownerId: payableId,
+          fileName: "cost-payable-confirmation.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/cost-payable-confirmation.png",
+        },
+      },
+    );
+    await request(client, `/payables/${payableId}/confirm`, {
+      method: "POST",
+      body: { attachmentIds: [costPayableConfirmAttachment.id] },
+    });
 
     const paymentRequest = await request<{ id: string }>(
       client,
@@ -889,6 +1047,21 @@ async function main() {
       method: "POST",
       body: { note: "E2E approved" },
     });
+    const requestPaymentAttachment = await request<{ id: string }>(
+      client,
+      "/attachments",
+      {
+        method: "POST",
+        body: {
+          ownerType: "payment_request",
+          ownerId: paymentRequest.id,
+          fileName: "payment-request-proof.png",
+          contentType: "image/png",
+          sizeBytes: 128,
+          url: "https://example.com/payment-request-proof.png",
+        },
+      },
+    );
     await request(client, "/payments", {
       method: "POST",
       body: {
@@ -897,13 +1070,34 @@ async function main() {
         amount: "300.00",
         account: "E2E Bank",
         payeeName: "E2E Vendor",
+        attachmentId: requestPaymentAttachment.id,
       },
     });
 
-    await request(client, `/periods/${periodMonth}/close`, {
-      method: "POST",
-      body: { reason: "E2E close" },
-    });
+    const periodVerificationPrisma = new PrismaClient();
+    try {
+      const billingRunBillRecord =
+        await periodVerificationPrisma.bill.findUnique({
+          where: { id: billId },
+          select: { orgId: true },
+        });
+      assert(billingRunBillRecord, "Billing run bill record missing.");
+      const autoClosedPeriod =
+        await periodVerificationPrisma.billingPeriod.findUnique({
+          where: {
+            orgId_periodMonth: {
+              orgId: billingRunBillRecord.orgId,
+              periodMonth,
+            },
+          },
+        });
+      assert(
+        autoClosedPeriod?.status === "CLOSED",
+        "Billing period was not auto-closed after received bill and paid payable.",
+      );
+    } finally {
+      await periodVerificationPrisma.$disconnect();
+    }
 
     const profitRows = await request<Array<{ customerCode: string }>>(
       client,

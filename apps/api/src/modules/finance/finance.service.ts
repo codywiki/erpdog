@@ -10,6 +10,7 @@ import {
   ExtraChargeStatus,
   InvoiceStatus,
   PayableStatus,
+  PaymentRecipientPlatform,
   PaymentRequestStatus,
   PaymentStatus,
   PeriodClosingStatus,
@@ -64,6 +65,10 @@ type AttachmentFilters = {
 
 type PayableFilters = {
   status?: string;
+} & PaginationQuery;
+
+type PaymentRecipientFilters = {
+  q?: string;
 } & PaginationQuery;
 
 type PaymentAllocationInput = {
@@ -616,6 +621,136 @@ export class FinanceService {
     return entry;
   }
 
+  async listPaymentRecipients(
+    user: AuthenticatedUser,
+    filters: PaymentRecipientFilters = {},
+  ) {
+    const where: Prisma.PaymentRecipientWhereInput = {
+      orgId: user.orgId,
+      isActive: true,
+      ...(filters.q
+        ? {
+            OR: [
+              { name: { contains: filters.q, mode: "insensitive" } },
+              { accountName: { contains: filters.q, mode: "insensitive" } },
+              { accountNo: { contains: filters.q, mode: "insensitive" } },
+              { bankBranch: { contains: filters.q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+    const pagination = parsePagination(filters);
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.paymentRecipient.findMany({
+        where,
+        orderBy: [{ name: "asc" }, { createdAt: "desc" }],
+        skip: pagination.skip,
+        take: pagination.take,
+      }),
+      this.prisma.paymentRecipient.count({ where }),
+    ]);
+
+    return paginated(items, total, pagination);
+  }
+
+  async createPaymentRecipient(user: AuthenticatedUser, rawBody: unknown) {
+    const body = bodyObject(rawBody);
+    const recipient = await this.prisma.paymentRecipient.create({
+      data: {
+        orgId: user.orgId,
+        name: stringField(body, "name"),
+        platform: this.paymentRecipientPlatform(body),
+        accountName: stringField(body, "accountName"),
+        accountNo: stringField(body, "accountNo"),
+        bankBranch: optionalString(body, "bankBranch"),
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "payment_recipient.create",
+      entityType: "payment_recipient",
+      entityId: recipient.id,
+      after: {
+        name: recipient.name,
+        platform: recipient.platform,
+        accountName: recipient.accountName,
+        accountNo: recipient.accountNo,
+      },
+    });
+
+    return recipient;
+  }
+
+  async updatePaymentRecipient(
+    user: AuthenticatedUser,
+    id: string,
+    rawBody: unknown,
+  ) {
+    const body = bodyObject(rawBody);
+    const before = await this.ensurePaymentRecipient(user, id);
+    const updated = await this.prisma.paymentRecipient.update({
+      where: { id },
+      data: {
+        name: optionalString(body, "name") ?? before.name,
+        platform: this.paymentRecipientPlatform(body, before.platform),
+        accountName: optionalString(body, "accountName") ?? before.accountName,
+        accountNo: optionalString(body, "accountNo") ?? before.accountNo,
+        bankBranch:
+          body.bankBranch === null
+            ? null
+            : (optionalString(body, "bankBranch") ?? before.bankBranch),
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "payment_recipient.update",
+      entityType: "payment_recipient",
+      entityId: id,
+      before: {
+        name: before.name,
+        platform: before.platform,
+        accountName: before.accountName,
+        accountNo: before.accountNo,
+      },
+      after: {
+        name: updated.name,
+        platform: updated.platform,
+        accountName: updated.accountName,
+        accountNo: updated.accountNo,
+      },
+    });
+
+    return updated;
+  }
+
+  async removePaymentRecipient(user: AuthenticatedUser, id: string) {
+    const before = await this.ensurePaymentRecipient(user, id);
+    await this.prisma.paymentRecipient.update({
+      where: { id },
+      data: { isActive: false },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "payment_recipient.delete",
+      entityType: "payment_recipient",
+      entityId: id,
+      before: {
+        name: before.name,
+        platform: before.platform,
+        accountName: before.accountName,
+        accountNo: before.accountNo,
+      },
+    });
+
+    return { id, deleted: true };
+  }
+
   async listPayables(user: AuthenticatedUser, filters: PayableFilters = {}) {
     const where: Prisma.PayableWhereInput = {
       orgId: user.orgId,
@@ -633,6 +768,7 @@ export class FinanceService {
           customer: true,
           bill: { include: { customer: true } },
           category: true,
+          paymentRecipient: true,
           paymentAllocations: {
             include: { payment: true },
             orderBy: { createdAt: "desc" },
@@ -651,6 +787,10 @@ export class FinanceService {
   async createPayable(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
     const billId = stringField(body, "billId");
+    const paymentRecipient = await this.ensurePaymentRecipient(
+      user,
+      stringField(body, "paymentRecipientId"),
+    );
     const bill = await this.prisma.bill.findFirst({
       where: { id: billId, orgId: user.orgId },
       select: {
@@ -674,13 +814,23 @@ export class FinanceService {
         customerId: bill.customerId,
         billId,
         categoryId,
-        vendorName: stringField(body, "vendorName"),
+        paymentRecipientId: paymentRecipient.id,
+        vendorName: paymentRecipient.name,
+        receiptPlatform: paymentRecipient.platform,
+        receiptAccountName: paymentRecipient.accountName,
+        receiptAccountNo: paymentRecipient.accountNo,
+        receiptBankBranch: paymentRecipient.bankBranch,
         periodMonth: bill.periodMonth,
         amount: positiveMoney(body.amount),
         dueDate: optionalDate(body, "dueDate"),
         remarks: optionalString(body, "remarks"),
       },
-      include: { customer: true, bill: true, category: true },
+      include: {
+        customer: true,
+        bill: true,
+        category: true,
+        paymentRecipient: true,
+      },
     });
     await this.audit.log({
       orgId: user.orgId,
@@ -691,10 +841,71 @@ export class FinanceService {
       after: {
         amount: payable.amount.toString(),
         vendorName: payable.vendorName,
+        paymentRecipientId: payable.paymentRecipientId,
         billId,
       },
     });
     return payable;
+  }
+
+  async confirmPayable(user: AuthenticatedUser, id: string, rawBody: unknown) {
+    const body = bodyObject(rawBody);
+    const attachmentIds = arrayField<unknown>(body, "attachmentIds").filter(
+      (item): item is string => typeof item === "string" && Boolean(item),
+    );
+    if (attachmentIds.length === 0) {
+      throw new BadRequestException(
+        "Payable confirmation attachments are required.",
+      );
+    }
+    const payable = await this.prisma.payable.findFirst({
+      where: { id, orgId: user.orgId },
+    });
+    if (!payable) {
+      throw new NotFoundException("Payable not found.");
+    }
+    if (payable.status !== PayableStatus.UNPAID) {
+      throw new ConflictException("Only unpaid payables can be confirmed.");
+    }
+    if (payable.customerId) {
+      await this.customers.ensureCustomerAccess(user, payable.customerId);
+    }
+    if (payable.periodMonth) {
+      await this.periodLocks.ensureOpen(user.orgId, payable.periodMonth);
+    }
+    await this.ensureAttachmentsBelongToOwner(
+      user,
+      "payable",
+      id,
+      attachmentIds,
+    );
+
+    const updated = await this.prisma.payable.update({
+      where: { id },
+      data: { status: PayableStatus.CONFIRMED },
+      include: {
+        customer: true,
+        bill: { include: { customer: true } },
+        category: true,
+        paymentRecipient: true,
+        paymentAllocations: {
+          include: { payment: true },
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "payable.confirm",
+      entityType: "payable",
+      entityId: id,
+      before: { status: payable.status },
+      after: { status: updated.status, attachmentIds },
+    });
+
+    return updated;
   }
 
   async listPaymentRequests(
@@ -987,6 +1198,7 @@ export class FinanceService {
     const requestId = optionalString(body, "requestId");
     const rawAllocations = arrayField<Payload>(body, "allocations");
     const amount = positiveMoney(body.amount);
+    const paymentAttachmentId = optionalString(body, "attachmentId");
     const allocationTotal = sum(
       rawAllocations.map((allocation) => positiveMoney(allocation.amount)),
     );
@@ -1046,6 +1258,23 @@ export class FinanceService {
           }
         }
 
+        if (
+          allocations.some((allocation) => allocation.payableId) &&
+          !paymentAttachmentId
+        ) {
+          throw new BadRequestException(
+            "Payment attachment is required for payable payment.",
+          );
+        }
+        if (paymentAttachmentId) {
+          await this.ensurePaymentAttachment(
+            user,
+            paymentAttachmentId,
+            requestId,
+            allocations,
+          );
+        }
+
         const created = await tx.payment.create({
           data: {
             orgId: user.orgId,
@@ -1058,7 +1287,7 @@ export class FinanceService {
             account: stringField(body, "account"),
             payeeName: stringField(body, "payeeName"),
             remarks: optionalString(body, "remarks"),
-            attachmentId: optionalString(body, "attachmentId"),
+            attachmentId: paymentAttachmentId,
             allocations: {
               create: allocations.map((allocation) => ({
                 payableId: allocation.payableId,
@@ -1851,6 +2080,11 @@ export class FinanceService {
     if (payable.status === PayableStatus.VOIDED) {
       throw new ConflictException("Voided payable cannot be paid.");
     }
+    if (payable.status === PayableStatus.UNPAID) {
+      throw new ConflictException(
+        "Payable must be invoiced or confirmed before payment.",
+      );
+    }
     if (payable.customerId) {
       await this.customers.ensureCustomerAccess(user, payable.customerId);
     }
@@ -1864,7 +2098,7 @@ export class FinanceService {
     const status = paidAmount.greaterThanOrEqualTo(payable.amount)
       ? PayableStatus.PAID
       : paidAmount.isZero()
-        ? PayableStatus.UNPAID
+        ? PayableStatus.CONFIRMED
         : PayableStatus.PARTIALLY_PAID;
 
     await tx.payable.update({
@@ -2051,7 +2285,7 @@ export class FinanceService {
     const status = paidAmount.greaterThanOrEqualTo(payable.amount)
       ? PayableStatus.PAID
       : paidAmount.isZero()
-        ? PayableStatus.UNPAID
+        ? PayableStatus.CONFIRMED
         : PayableStatus.PARTIALLY_PAID;
 
     await tx.payable.update({
@@ -2149,6 +2383,104 @@ export class FinanceService {
     if (!category) {
       throw new NotFoundException("Cost category not found.");
     }
+  }
+
+  private paymentRecipientPlatform(
+    body: Payload,
+    fallback?: PaymentRecipientPlatform,
+  ) {
+    const value = optionalString(body, "platform");
+    if (!value) {
+      if (fallback) {
+        return fallback;
+      }
+      throw new BadRequestException("platform is required.");
+    }
+
+    if (
+      ![
+        PaymentRecipientPlatform.PRIVATE_BANK,
+        PaymentRecipientPlatform.CORPORATE_BANK,
+        PaymentRecipientPlatform.WECHAT,
+        PaymentRecipientPlatform.ALIPAY,
+      ].includes(value as PaymentRecipientPlatform)
+    ) {
+      throw new BadRequestException("platform is invalid.");
+    }
+
+    return value as PaymentRecipientPlatform;
+  }
+
+  private async ensurePaymentRecipient(user: AuthenticatedUser, id: string) {
+    const recipient = await this.prisma.paymentRecipient.findFirst({
+      where: { id, orgId: user.orgId, isActive: true },
+    });
+    if (!recipient) {
+      throw new NotFoundException("Payment recipient not found.");
+    }
+    return recipient;
+  }
+
+  private async ensureAttachmentsBelongToOwner(
+    user: AuthenticatedUser,
+    ownerType: string,
+    ownerId: string,
+    attachmentIds: string[],
+  ) {
+    const uniqueIds = Array.from(new Set(attachmentIds));
+    const count = await this.prisma.attachment.count({
+      where: {
+        id: { in: uniqueIds },
+        orgId: user.orgId,
+        ownerType,
+        ownerId,
+      },
+    });
+    if (count !== uniqueIds.length) {
+      throw new BadRequestException(
+        "Attachments must be uploaded to this record first.",
+      );
+    }
+  }
+
+  private async ensurePaymentAttachment(
+    user: AuthenticatedUser,
+    attachmentId: string,
+    requestId: string | undefined,
+    allocations: PaymentAllocationInput[],
+  ) {
+    const attachment = await this.prisma.attachment.findFirst({
+      where: { id: attachmentId, orgId: user.orgId },
+    });
+    if (!attachment) {
+      throw new NotFoundException("Attachment not found.");
+    }
+    await this.ensureAttachmentAccess(user, attachment);
+
+    if (
+      requestId &&
+      attachment.ownerType === "payment_request" &&
+      attachment.ownerId === requestId
+    ) {
+      return;
+    }
+
+    const payableIds = new Set(
+      allocations
+        .map((allocation) => allocation.payableId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    if (
+      attachment.ownerType === "payable" &&
+      attachment.ownerId &&
+      payableIds.has(attachment.ownerId)
+    ) {
+      return;
+    }
+
+    throw new BadRequestException(
+      "Payment attachment must belong to this payment flow.",
+    );
   }
 
   private attachmentSize(body: Payload) {

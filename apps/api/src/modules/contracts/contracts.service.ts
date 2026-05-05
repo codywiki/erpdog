@@ -43,6 +43,7 @@ const CONTRACT_IMPORT_HEADERS = [
   "合同名称",
   "客户编码",
   "签约主体编号",
+  "合同附件ID",
   "状态",
   "开始日期",
   "结束日期",
@@ -117,6 +118,10 @@ export class ContractsService {
 
   async create(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
+    const attachmentIds = this.attachmentIds(body);
+    if (attachmentIds.length === 0) {
+      throw new BadRequestException("Contract attachment is required.");
+    }
     const customerId = stringField(body, "customerId");
     const customer = await this.customers.ensureCustomerAccess(
       user,
@@ -234,6 +239,42 @@ export class ContractsService {
     });
 
     return this.presentContract(updated);
+  }
+
+  async remove(user: AuthenticatedUser, id: string) {
+    const contract = await this.get(user, id);
+    const [billCount, extraChargeCount] = await this.prisma.$transaction([
+      this.prisma.bill.count({ where: { contractId: id } }),
+      this.prisma.extraCharge.count({ where: { contractId: id } }),
+    ]);
+    if (billCount > 0 || extraChargeCount > 0) {
+      throw new ConflictException(
+        "Contract is already used by business records and cannot be deleted.",
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.attachment.deleteMany({
+        where: { orgId: user.orgId, ownerType: "contract", ownerId: id },
+      });
+      await tx.contract.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          orgId: user.orgId,
+          actorUserId: user.id,
+          action: "contract.delete",
+          entityType: "contract",
+          entityId: id,
+          before: {
+            code: contract.code,
+            customerId: contract.customerId,
+            status: contract.status,
+          },
+        },
+      });
+    });
+
+    return { id, deleted: true };
   }
 
   async addChargeItem(
@@ -408,6 +449,10 @@ export class ContractsService {
           { 字段: "合同编码", 说明: "系统自动生成，导入时无需填写。" },
           { 字段: "客户编码", 说明: "必填，必须匹配已存在客户编码。" },
           { 字段: "签约主体编号", 说明: "必填，必须匹配已存在签约主体编号。" },
+          {
+            字段: "合同附件ID",
+            说明: "必填，先上传 PDF 合同附件后填写附件 ID；多个 ID 用逗号分隔。",
+          },
           {
             字段: "状态",
             说明: "可选：DRAFT/ACTIVE/SUSPENDED/EXPIRED/TERMINATED。",
@@ -799,14 +844,12 @@ export class ContractsService {
     contractId: string,
     body: Payload,
   ) {
-    const attachmentIds = arrayField<unknown>(body, "attachmentIds").filter(
-      (id): id is string => typeof id === "string" && Boolean(id.trim()),
-    );
+    const attachmentIds = this.attachmentIds(body);
     if (attachmentIds.length === 0) {
       return;
     }
 
-    await tx.attachment.updateMany({
+    const attachments = await tx.attachment.findMany({
       where: {
         id: { in: attachmentIds },
         orgId: user.orgId,
@@ -815,12 +858,56 @@ export class ContractsService {
           { ownerType: "contract", ownerId: contractId },
         ],
       },
-      data: {
-        ownerType: "contract",
-        ownerId: contractId,
-        contractId,
-      },
     });
+    if (attachments.length !== new Set(attachmentIds).size) {
+      throw new BadRequestException(
+        "Contract attachments must be uploaded before saving.",
+      );
+    }
+    for (const attachment of attachments) {
+      this.validateContractAttachment(
+        attachment.fileName,
+        attachment.contentType ?? undefined,
+        attachment.sizeBytes ?? undefined,
+      );
+    }
+
+    await tx.attachment.updateMany({
+      where: { id: { in: attachmentIds }, orgId: user.orgId },
+      data: { ownerType: "contract", ownerId: contractId, contractId },
+    });
+  }
+
+  private attachmentIds(body: Payload) {
+    return arrayField<unknown>(body, "attachmentIds").filter(
+      (id): id is string => typeof id === "string" && Boolean(id.trim()),
+    );
+  }
+
+  private validateContractAttachment(
+    fileName: string,
+    contentType: string | undefined,
+    sizeBytes: bigint | undefined,
+  ) {
+    const normalizedName = fileName.toLowerCase();
+    const normalizedContentType = contentType?.toLowerCase();
+    if (
+      !normalizedName.endsWith(".pdf") ||
+      (normalizedContentType !== undefined &&
+        normalizedContentType !== "application/pdf")
+    ) {
+      throw new BadRequestException("Contract attachments must be PDF files.");
+    }
+    if (sizeBytes === undefined) {
+      throw new BadRequestException(
+        "Contract attachment sizeBytes is required.",
+      );
+    }
+    if (sizeBytes > BigInt(20 * 1024 * 1024)) {
+      throw new BadRequestException(
+        "Contract attachments must be smaller than 20MB.",
+      );
+    }
   }
 
   private async ensureChargeItemEditable(contractId: string, itemId: string) {
@@ -929,6 +1016,7 @@ export class ContractsService {
       customerId: customer.id,
       name: this.cell(group.row, ["合同名称", "name", "Name"]),
       signingEntityId: await this.signingEntityIdFromImportRow(user, group.row),
+      attachmentIds: this.attachmentIdsFromImportRow(group.row),
       status: this.contractStatusFromCell(
         this.cell(group.row, ["状态", "status"]),
       ),
@@ -963,6 +1051,23 @@ export class ContractsService {
     }
 
     return signingEntity.id;
+  }
+
+  private attachmentIdsFromImportRow(row: Record<string, unknown>) {
+    const raw = this.cell(row, [
+      "合同附件ID",
+      "合同附件Ids",
+      "附件ID",
+      "attachmentIds",
+    ]);
+    if (!raw) {
+      return [];
+    }
+
+    return raw
+      .split(/[,，;；\s]+/)
+      .map((id) => id.trim())
+      .filter(Boolean);
   }
 
   private chargeItemImportPayload(row: Record<string, unknown>) {

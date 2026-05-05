@@ -83,21 +83,24 @@ export class PeriodLockService {
       }
 
       const [
-        receivedBillCount,
-        openBillCount,
+        bills,
         payableCount,
         openPayableCount,
         draftExtraChargeCount,
         pendingPaymentRequestCount,
       ] = await Promise.all([
-        tx.bill.count({
-          where: { orgId, periodMonth, status: "RECEIVED" },
-        }),
-        tx.bill.count({
+        tx.bill.findMany({
           where: {
             orgId,
             periodMonth,
-            status: { notIn: ["RECEIVED", "VOIDED", "CLOSED"] },
+            status: { notIn: ["VOIDED", "CLOSED"] },
+          },
+          select: {
+            totalAmount: true,
+            receiptAllocations: {
+              where: { receipt: { status: { not: "REVERSED" } } },
+              select: { amount: true },
+            },
           },
         }),
         tx.payable.count({
@@ -131,6 +134,15 @@ export class PeriodLockService {
           },
         }),
       ]);
+      const receivedBillCount = bills.filter((bill) =>
+        bill.receiptAllocations
+          .reduce(
+            (total, allocation) => total.plus(allocation.amount),
+            new Prisma.Decimal(0),
+          )
+          .greaterThanOrEqualTo(bill.totalAmount),
+      ).length;
+      const openBillCount = bills.length - receivedBillCount;
 
       if (
         receivedBillCount === 0 ||

@@ -217,6 +217,44 @@ export class CustomersService {
     return updated;
   }
 
+  async remove(user: AuthenticatedUser, id: string) {
+    const customer = await this.ensureCustomerAccess(user, id);
+    const usage = await this.prisma.$transaction([
+      this.prisma.contract.count({ where: { customerId: id } }),
+      this.prisma.bill.count({ where: { customerId: id } }),
+      this.prisma.extraCharge.count({ where: { customerId: id } }),
+      this.prisma.costEntry.count({ where: { customerId: id } }),
+      this.prisma.payable.count({ where: { customerId: id } }),
+      this.prisma.paymentRequest.count({ where: { customerId: id } }),
+      this.prisma.monthlyCustomerMetric.count({ where: { customerId: id } }),
+    ]);
+    if (usage.some((count) => count > 0)) {
+      throw new ConflictException(
+        "Customer is already used by business records and cannot be deleted.",
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.customer.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          orgId: user.orgId,
+          actorUserId: user.id,
+          action: "customer.delete",
+          entityType: "customer",
+          entityId: id,
+          before: {
+            code: customer.code,
+            name: customer.name,
+            fullName: customer.fullName,
+          },
+        },
+      });
+    });
+
+    return { id, deleted: true };
+  }
+
   async setOwners(
     user: AuthenticatedUser,
     customerId: string,

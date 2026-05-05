@@ -157,13 +157,19 @@ type CostEntry = {
 
 type Payable = {
   id: string;
+  paymentRecipientId?: string | null;
   vendorName: string;
+  receiptPlatform?: PaymentRecipientPlatform;
+  receiptAccountName?: string;
+  receiptAccountNo?: string;
+  receiptBankBranch?: string | null;
   amount: string;
   paidAmount?: string;
   periodMonth?: string | null;
   status: string;
   customer?: Customer | null;
   bill?: Pick<Bill, "id" | "billNo" | "periodMonth" | "status"> | null;
+  paymentRecipient?: PaymentRecipient | null;
   paymentAllocations?: Array<{
     id?: string;
     amount?: string;
@@ -174,6 +180,22 @@ type Payable = {
       status?: string;
     } | null;
   }>;
+};
+
+type PaymentRecipientPlatform =
+  | "PRIVATE_BANK"
+  | "CORPORATE_BANK"
+  | "WECHAT"
+  | "ALIPAY";
+
+type PaymentRecipient = {
+  id: string;
+  name: string;
+  platform: PaymentRecipientPlatform;
+  accountName: string;
+  accountNo: string;
+  bankBranch?: string | null;
+  isActive?: boolean;
 };
 
 type PaymentRequest = {
@@ -237,6 +259,7 @@ type ConsoleData = {
   receipts: Receipt[];
   costEntries: CostEntry[];
   payables: Payable[];
+  paymentRecipients: PaymentRecipient[];
   paymentRequests: PaymentRequest[];
   payments: Payment[];
   users: ConsoleUser[];
@@ -406,6 +429,33 @@ function translateErrorMessage(message: string) {
   if (/Signing entity is already used/i.test(message)) {
     return "该签约主体已被合同使用，不能删除。";
   }
+  if (/Customer is already used/i.test(message)) {
+    return "该客户已有关联业务记录，不能删除。";
+  }
+  if (/Contract is already used/i.test(message)) {
+    return "该合同已有关联业务记录，不能删除。";
+  }
+  if (/Contract attachment is required/i.test(message)) {
+    return "新建合同必须上传合同附件。";
+  }
+  if (/Payment recipient not found/i.test(message)) {
+    return "请选择有效收款人。";
+  }
+  if (/Payable must be invoiced or confirmed/i.test(message)) {
+    return "应付账单必须先变更为已开票/确认，才能标记已支付。";
+  }
+  if (/Payable confirmation attachments are required/i.test(message)) {
+    return "修改为已开票/确认必须上传文件或截图。";
+  }
+  if (/Only unpaid payables can be confirmed/i.test(message)) {
+    return "只有待支付状态可以修改为已开票/确认。";
+  }
+  if (/Payment attachment is required for payable payment/i.test(message)) {
+    return "修改为已支付必须上传银行打款回单或付款截图。";
+  }
+  if (/Payment attachment must belong to this payment flow/i.test(message)) {
+    return "付款附件必须属于当前应付或付款申请。";
+  }
   if (/Unique constraint failed|already exists/i.test(message)) {
     return "编码或邮箱已存在，请换一个。";
   }
@@ -504,9 +554,17 @@ const billStatusText: Record<string, string> = {
 
 const payableStatusText: Record<string, string> = {
   UNPAID: "待支付",
+  CONFIRMED: "已开票/确认",
   PARTIALLY_PAID: "待支付",
   PAID: "已支付",
   VOIDED: "已作废",
+};
+
+const paymentRecipientPlatformText: Record<PaymentRecipientPlatform, string> = {
+  PRIVATE_BANK: "对私银行",
+  CORPORATE_BANK: "对公银行",
+  WECHAT: "微信",
+  ALIPAY: "支付宝",
 };
 
 const ownerDelegatedRoleCodes = [
@@ -546,6 +604,7 @@ function emptyConsoleData(): ConsoleData {
     receipts: [],
     costEntries: [],
     payables: [],
+    paymentRecipients: [],
     paymentRequests: [],
     payments: [],
     users: [],
@@ -599,10 +658,41 @@ function billAttachmentIds(bill: Bill) {
 }
 
 function nextPayableStatus(status: string) {
-  if (status === "UNPAID" || status === "PARTIALLY_PAID") {
+  if (status === "UNPAID") {
+    return "CONFIRMED";
+  }
+  if (status === "CONFIRMED" || status === "PARTIALLY_PAID") {
     return "PAID";
   }
   return "";
+}
+
+function paymentRecipientAccountText(recipient?: PaymentRecipient | null) {
+  if (!recipient) {
+    return "-";
+  }
+
+  return [
+    paymentRecipientPlatformText[recipient.platform],
+    recipient.accountName,
+    recipient.accountNo,
+    recipient.bankBranch,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function payableAccountText(payable: Payable) {
+  return [
+    payable.receiptPlatform
+      ? paymentRecipientPlatformText[payable.receiptPlatform]
+      : undefined,
+    payable.receiptAccountName,
+    payable.receiptAccountNo,
+    payable.receiptBankBranch,
+  ]
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function payableAttachmentStatusLabel(
@@ -616,6 +706,9 @@ function payableAttachmentStatusLabel(
     )
   ) {
     return "已支付";
+  }
+  if (payable?.status === "CONFIRMED") {
+    return "已开票/确认";
   }
   return "未标记";
 }
@@ -780,6 +873,9 @@ export default function Home() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [costEntries, setCostEntries] = useState<CostEntry[]>([]);
   const [payables, setPayables] = useState<Payable[]>([]);
+  const [paymentRecipients, setPaymentRecipients] = useState<
+    PaymentRecipient[]
+  >([]);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequest[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [users, setUsers] = useState<ConsoleUser[]>([]);
@@ -825,6 +921,7 @@ export default function Home() {
   const [contractTierMode, setContractTierMode] = useState("NONE");
   const [contractTierDescription, setContractTierDescription] = useState("");
   const [contractFiles, setContractFiles] = useState<File[]>([]);
+  const [contractDetailOpen, setContractDetailOpen] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedSigningEntityId, setSelectedSigningEntityId] = useState("");
   const [selectedContractId, setSelectedContractId] = useState("");
@@ -833,7 +930,7 @@ export default function Home() {
   const [receivableTab, setReceivableTab] = useState<"open" | "received">(
     "open",
   );
-  const [payableTab, setPayableTab] = useState<"open" | "paid">("open");
+  const [payableTab, setPayableTab] = useState<"bills" | "recipients">("bills");
   const [receivableAmount, setReceivableAmount] = useState("0.00");
   const [billStatusDialogOpen, setBillStatusDialogOpen] = useState(false);
   const [billStatusTarget, setBillStatusTarget] = useState("");
@@ -847,7 +944,9 @@ export default function Home() {
   } | null>(null);
   const [payableDialogOpen, setPayableDialogOpen] = useState(false);
   const [selectedPayableId, setSelectedPayableId] = useState("");
-  const [payableVendorName, setPayableVendorName] = useState("");
+  const [selectedPaymentRecipientId, setSelectedPaymentRecipientId] =
+    useState("");
+  const [payableRecipientSearch, setPayableRecipientSearch] = useState("");
   const [payableAmount, setPayableAmount] = useState("0.00");
   const [payableRemarks, setPayableRemarks] = useState("");
   const [payableStatusDialogOpen, setPayableStatusDialogOpen] = useState(false);
@@ -861,6 +960,16 @@ export default function Home() {
   const [payablePaymentAccount, setPayablePaymentAccount] =
     useState("默认付款账户");
   const [receiptAccount, setReceiptAccount] = useState("默认收款账户");
+  const [recipientDialogOpen, setRecipientDialogOpen] = useState(false);
+  const [editingRecipientId, setEditingRecipientId] = useState<string | null>(
+    null,
+  );
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientPlatform, setRecipientPlatform] =
+    useState<PaymentRecipientPlatform>("PRIVATE_BANK");
+  const [recipientAccountName, setRecipientAccountName] = useState("");
+  const [recipientAccountNo, setRecipientAccountNo] = useState("");
+  const [recipientBankBranch, setRecipientBankBranch] = useState("");
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserName, setNewUserName] = useState("");
@@ -873,6 +982,9 @@ export default function Home() {
   const selectedPayable = payables.find(
     (payable) => payable.id === selectedPayableId,
   );
+  const selectedPaymentRecipient = paymentRecipients.find(
+    (recipient) => recipient.id === selectedPaymentRecipientId,
+  );
   const selectedContract = contracts.find(
     (contract) => contract.id === selectedContractId,
   );
@@ -884,6 +996,9 @@ export default function Home() {
   );
   const editingContract = contracts.find(
     (contract) => contract.id === editingContractId,
+  );
+  const editingRecipient = paymentRecipients.find(
+    (recipient) => recipient.id === editingRecipientId,
   );
   const editingConsoleUser = users.find((item) => item.id === editingUserId);
   const activeModule = getModuleMeta(active);
@@ -980,6 +1095,7 @@ export default function Home() {
     setReceipts(data.receipts);
     setCostEntries(data.costEntries);
     setPayables(data.payables);
+    setPaymentRecipients(data.paymentRecipients);
     setPaymentRequests(data.paymentRequests);
     setPayments(data.payments);
     setUsers(data.users);
@@ -1010,6 +1126,11 @@ export default function Home() {
       data.payables.some((payable) => payable.id === current)
         ? current
         : (data.payables[0]?.id ?? ""),
+    );
+    setSelectedPaymentRecipientId((current) =>
+      data.paymentRecipients.some((recipient) => recipient.id === current)
+        ? current
+        : (data.paymentRecipients[0]?.id ?? ""),
     );
     setNewUserRoleCode((current) =>
       data.roles.some((role) => role.code === current)
@@ -1121,6 +1242,7 @@ export default function Home() {
       nextReceipts,
       nextCostEntries,
       nextPayables,
+      nextPaymentRecipients,
       nextRequests,
       nextPayments,
       nextUsers,
@@ -1174,6 +1296,11 @@ export default function Home() {
         "/payables?pageSize=50",
         emptyPage<Payable>(),
       ),
+      fetchIf<PaymentRecipient[] | PaginatedResponse<PaymentRecipient>>(
+        can("cost.manage"),
+        "/payment-recipients?pageSize=100",
+        emptyPage<PaymentRecipient>(),
+      ),
       fetchIf<PaymentRequest[] | PaginatedResponse<PaymentRequest>>(
         can("payment_request.create", "payment_request.approve", "payment.pay"),
         "/payment-requests?pageSize=50",
@@ -1211,6 +1338,7 @@ export default function Home() {
       receipts: listItems(nextReceipts),
       costEntries: listItems(nextCostEntries),
       payables: listItems(nextPayables),
+      paymentRecipients: listItems(nextPaymentRecipients),
       paymentRequests: listItems(nextRequests),
       payments: listItems(nextPayments),
       users: listItems(nextUsers),
@@ -1523,6 +1651,17 @@ export default function Home() {
     setContractFiles([]);
   }
 
+  function openContractDetail(contract: Contract) {
+    setSelectedContractId(contract.id);
+    setAttachmentPreview(null);
+    setContractDetailOpen(true);
+  }
+
+  function closeContractDetail() {
+    setContractDetailOpen(false);
+    setAttachmentPreview(null);
+  }
+
   function updateContractFiles(fileList: FileList | null) {
     const nextFiles = Array.from(fileList ?? []);
     const invalid = nextFiles.find((file) => !isContractFileValid(file));
@@ -1538,8 +1677,8 @@ export default function Home() {
   }
 
   async function uploadAttachment(
-    ownerType: string,
-    ownerId: string,
+    ownerType: string | undefined,
+    ownerId: string | undefined,
     file: File,
   ) {
     const presigned = await request<{
@@ -1552,8 +1691,7 @@ export default function Home() {
     }>("/attachments/presign-upload", {
       method: "POST",
       body: JSON.stringify({
-        ownerType,
-        ownerId,
+        ...(ownerType && ownerId ? { ownerType, ownerId } : {}),
         fileName: file.name,
         contentType: file.type || "application/octet-stream",
         sizeBytes: file.size,
@@ -1572,10 +1710,12 @@ export default function Home() {
     return presigned.attachment.id;
   }
 
-  async function uploadContractFiles(contractId: string, files: File[]) {
+  async function uploadContractFiles(files: File[]) {
+    const attachmentIds: string[] = [];
     for (const file of files) {
-      await uploadAttachment("contract", contractId, file);
+      attachmentIds.push(await uploadAttachment(undefined, undefined, file));
     }
+    return attachmentIds;
   }
 
   async function uploadAttachments(
@@ -1636,6 +1776,19 @@ export default function Home() {
         resetCustomerForm();
         return result;
       },
+    );
+  }
+
+  function deleteCustomer(customer: Customer) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除客户 ${customer.name}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除客户", ["customer.write"], () =>
+      request(`/customers/${customer.id}`, { method: "DELETE" }),
     );
   }
 
@@ -1793,10 +1946,19 @@ export default function Home() {
     }
 
     const isEditing = Boolean(editingContractId);
+    if (!isEditing && contractFiles.length === 0) {
+      setMessage("创建合同失败：必须上传合同附件。");
+      return;
+    }
+
     void submitAction(
       isEditing ? "修改合同" : "创建合同",
       ["contract.write"],
       async () => {
+        const attachmentIds =
+          contractFiles.length > 0
+            ? await uploadContractFiles(contractFiles)
+            : [];
         const result = await request<Contract>(
           isEditing ? `/contracts/${editingContractId}` : "/contracts",
           {
@@ -1817,16 +1979,27 @@ export default function Home() {
                     },
                   ]
                 : [],
+              ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
             }),
           },
         );
-        if (contractFiles.length > 0) {
-          await uploadContractFiles(result.id, contractFiles);
-        }
         setContractDialogOpen(false);
         resetContractForm(selectedCustomerId);
         return result;
       },
+    );
+  }
+
+  function deleteContract(contract: Contract) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除合同 ${contract.code}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除合同", ["contract.write"], () =>
+      request(`/contracts/${contract.id}`, { method: "DELETE" }),
     );
   }
 
@@ -2045,9 +2218,16 @@ export default function Home() {
       setMessage("新增成本应付失败：请先创建应收账单。");
       return;
     }
+    if (paymentRecipients.length === 0) {
+      setMessage("新增成本应付失败：请先在收款人页面新增收款人。");
+      return;
+    }
     const nextBillId = selectedBillId || bills[0]?.id || "";
     setSelectedBillId(nextBillId);
-    setPayableVendorName("");
+    setSelectedPaymentRecipientId(
+      selectedPaymentRecipientId || paymentRecipients[0]?.id || "",
+    );
+    setPayableRecipientSearch("");
     setPayableAmount("0.00");
     setPayableRemarks("");
     setPayableDialogOpen(true);
@@ -2057,14 +2237,107 @@ export default function Home() {
     setPayableDialogOpen(false);
   }
 
+  function resetRecipientForm() {
+    setEditingRecipientId(null);
+    setRecipientName("");
+    setRecipientPlatform("PRIVATE_BANK");
+    setRecipientAccountName("");
+    setRecipientAccountNo("");
+    setRecipientBankBranch("");
+  }
+
+  function openCreateRecipientDialog() {
+    const blockedReason = actionBlockReason("cost.manage");
+    if (blockedReason) {
+      setMessage(`新增收款人失败：${blockedReason}`);
+      return;
+    }
+
+    resetRecipientForm();
+    setRecipientDialogOpen(true);
+  }
+
+  function openEditRecipientDialog(recipient: PaymentRecipient) {
+    const blockedReason = actionBlockReason("cost.manage");
+    if (blockedReason) {
+      setMessage(`编辑收款人失败：${blockedReason}`);
+      return;
+    }
+
+    setEditingRecipientId(recipient.id);
+    setRecipientName(recipient.name);
+    setRecipientPlatform(recipient.platform);
+    setRecipientAccountName(recipient.accountName);
+    setRecipientAccountNo(recipient.accountNo);
+    setRecipientBankBranch(recipient.bankBranch ?? "");
+    setRecipientDialogOpen(true);
+  }
+
+  function closeRecipientDialog() {
+    setRecipientDialogOpen(false);
+    resetRecipientForm();
+  }
+
+  function savePaymentRecipient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !recipientName.trim() ||
+      !recipientAccountName.trim() ||
+      !recipientAccountNo.trim()
+    ) {
+      setMessage("保存收款人失败：收款方名称、账户名和账号不能为空。");
+      return;
+    }
+
+    const isEditing = Boolean(editingRecipientId);
+    void submitAction(
+      isEditing ? "修改收款人" : "新增收款人",
+      ["cost.manage"],
+      async () => {
+        const result = await request<PaymentRecipient>(
+          isEditing
+            ? `/payment-recipients/${editingRecipientId}`
+            : "/payment-recipients",
+          {
+            method: isEditing ? "PATCH" : "POST",
+            body: JSON.stringify({
+              name: recipientName,
+              platform: recipientPlatform,
+              accountName: recipientAccountName,
+              accountNo: recipientAccountNo,
+              bankBranch: recipientBankBranch || null,
+            }),
+          },
+        );
+        setSelectedPaymentRecipientId(result.id);
+        setRecipientDialogOpen(false);
+        resetRecipientForm();
+        return result;
+      },
+    );
+  }
+
+  function deletePaymentRecipient(recipient: PaymentRecipient) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除收款人 ${recipient.name}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除收款人", ["cost.manage"], () =>
+      request(`/payment-recipients/${recipient.id}`, { method: "DELETE" }),
+    );
+  }
+
   function createCostPayable(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedBillId) {
       setMessage("新增成本应付失败：请选择关联账单。");
       return;
     }
-    if (!payableVendorName.trim()) {
-      setMessage("新增成本应付失败：请填写收款方。");
+    if (!selectedPaymentRecipient) {
+      setMessage("新增成本应付失败：请选择已有收款人。");
       return;
     }
     if (!Number.isFinite(Number(payableAmount)) || Number(payableAmount) <= 0) {
@@ -2077,7 +2350,7 @@ export default function Home() {
         method: "POST",
         body: JSON.stringify({
           billId: selectedBillId,
-          vendorName: payableVendorName,
+          paymentRecipientId: selectedPaymentRecipient.id,
           amount: payableAmount,
           remarks: payableRemarks,
         }),
@@ -2122,43 +2395,59 @@ export default function Home() {
       setMessage("修改应付状态失败：请上传本次状态变更对应的附件。");
       return;
     }
-    const unpaidAmount =
-      Number(selectedPayable.amount ?? 0) -
-      Number(selectedPayable.paidAmount ?? 0);
-    if (unpaidAmount <= 0) {
-      setMessage("修改应付状态失败：该应付已支付。");
-      return;
-    }
-
-    void submitAction("修改为已支付", ["payable.settle"], async () => {
-      const attachmentIds = await uploadAttachments(
-        "payable",
-        selectedPayable.id,
-        payableStatusFiles,
-      );
-      const primaryAttachmentId = attachmentIds[0];
-      if (!primaryAttachmentId) {
-        throw new Error("请上传本次状态变更对应的附件。");
-      }
-      const result = await request("/payments", {
-        method: "POST",
-        body: JSON.stringify({
-          paidAt: new Date().toISOString(),
-          amount: amountInput(unpaidAmount),
-          account: payablePaymentAccount,
-          payeeName: selectedPayable.vendorName,
-          attachmentId: primaryAttachmentId,
-          allocations: [
+    void submitAction(
+      payableStatusTarget === "CONFIRMED"
+        ? "修改为已开票/确认"
+        : "修改为已支付",
+      ["payable.settle"],
+      async () => {
+        const attachmentIds = await uploadAttachments(
+          "payable",
+          selectedPayable.id,
+          payableStatusFiles,
+        );
+        const primaryAttachmentId = attachmentIds[0];
+        if (!primaryAttachmentId) {
+          throw new Error("请上传本次状态变更对应的附件。");
+        }
+        if (payableStatusTarget === "CONFIRMED") {
+          const result = await request(
+            `/payables/${selectedPayable.id}/confirm`,
             {
-              payableId: selectedPayable.id,
-              amount: amountInput(unpaidAmount),
+              method: "POST",
+              body: JSON.stringify({ attachmentIds }),
             },
-          ],
-        }),
-      });
-      closePayableStatusDialog();
-      return result;
-    });
+          );
+          closePayableStatusDialog();
+          return result;
+        }
+
+        const unpaidAmount =
+          Number(selectedPayable.amount ?? 0) -
+          Number(selectedPayable.paidAmount ?? 0);
+        if (unpaidAmount <= 0) {
+          throw new Error("该应付已支付。");
+        }
+        const result = await request("/payments", {
+          method: "POST",
+          body: JSON.stringify({
+            paidAt: new Date().toISOString(),
+            amount: amountInput(unpaidAmount),
+            account: payablePaymentAccount,
+            payeeName: selectedPayable.vendorName,
+            attachmentId: primaryAttachmentId,
+            allocations: [
+              {
+                payableId: selectedPayable.id,
+                amount: amountInput(unpaidAmount),
+              },
+            ],
+          }),
+        });
+        closePayableStatusDialog();
+        return result;
+      },
+    );
   }
 
   async function loadPayableAttachments(payable: Payable) {
@@ -2424,6 +2713,7 @@ export default function Home() {
             customerFullName={customerFullName}
             customerName={customerName}
             customers={customers}
+            deleteCustomer={deleteCustomer}
             disabledReason={actionBlockReason("customer.write")}
             editingCustomer={editingCustomer}
             openCreateCustomerDialog={openCreateCustomerDialog}
@@ -2464,8 +2754,11 @@ export default function Home() {
 
         {active === "contracts" ? (
           <ContractsModule
+            attachmentPreview={attachmentPreview}
             closeContractDialog={closeContractDialog}
+            closeContractDetail={closeContractDetail}
             contractCode={contractCode}
+            contractDetailOpen={contractDetailOpen}
             contractDialogOpen={contractDialogOpen}
             contractEndDate={contractEndDate}
             contractFee={contractFee}
@@ -2478,11 +2771,17 @@ export default function Home() {
             contracts={contracts}
             createContract={createContract}
             customers={customers}
+            deleteContract={deleteContract}
             disabledReason={actionBlockReason("contract.write")}
             editingContract={editingContract}
+            openAttachmentPreview={(attachment) =>
+              void openAttachmentPreview(attachment)
+            }
             openCreateContractDialog={openCreateContractDialog}
+            openContractDetail={openContractDetail}
             openEditContractDialog={openEditContractDialog}
             selectedCustomerId={selectedCustomerId}
+            selectedContract={selectedContract}
             selectedContractId={selectedContractId}
             setContractEndDate={setContractEndDate}
             setContractFee={setContractFee}
@@ -2559,12 +2858,17 @@ export default function Home() {
             closePayableAttachmentsDialog={closePayableAttachmentsDialog}
             closePayableDialog={closePayableDialog}
             closePayableStatusDialog={closePayableStatusDialog}
+            closeRecipientDialog={closeRecipientDialog}
             createCostPayable={createCostPayable}
+            deletePaymentRecipient={deletePaymentRecipient}
             disabledReason={actionBlockReason("cost.manage")}
+            editingRecipient={editingRecipient}
             openAttachmentPreview={(attachment) =>
               void openAttachmentPreview(attachment)
             }
             openCreatePayableDialog={openCreatePayableDialog}
+            openCreateRecipientDialog={openCreateRecipientDialog}
+            openEditRecipientDialog={openEditRecipientDialog}
             openPayableAttachmentsDialog={openPayableAttachmentsDialog}
             openPayableStatusDialog={openPayableStatusDialog}
             payableAmount={payableAmount}
@@ -2577,23 +2881,39 @@ export default function Home() {
             payableStatusFiles={payableStatusFiles}
             payableStatusTarget={payableStatusTarget}
             payableTab={payableTab}
-            payableVendorName={payableVendorName}
+            payableRecipientSearch={payableRecipientSearch}
             payables={payables}
+            paymentRecipients={paymentRecipients}
+            recipientAccountName={recipientAccountName}
+            recipientAccountNo={recipientAccountNo}
+            recipientBankBranch={recipientBankBranch}
+            recipientDialogOpen={recipientDialogOpen}
+            recipientName={recipientName}
+            recipientPlatform={recipientPlatform}
             savePayableStatus={savePayableStatus}
+            savePaymentRecipient={savePaymentRecipient}
             selectedBillId={selectedBillId}
             selectedPayable={selectedPayable}
             selectedPayableId={selectedPayableId}
+            selectedPaymentRecipient={selectedPaymentRecipient}
+            selectedPaymentRecipientId={selectedPaymentRecipientId}
             setPayableAmount={setPayableAmount}
             setPayablePaymentAccount={setPayablePaymentAccount}
+            setPayableRecipientSearch={setPayableRecipientSearch}
             setPayableStatusFiles={(fileList) =>
               updateBusinessFiles(fileList, setPayableStatusFiles, "状态附件")
             }
             setPayableStatusTarget={setPayableStatusTarget}
             setPayableRemarks={setPayableRemarks}
             setPayableTab={setPayableTab}
-            setPayableVendorName={setPayableVendorName}
+            setRecipientAccountName={setRecipientAccountName}
+            setRecipientAccountNo={setRecipientAccountNo}
+            setRecipientBankBranch={setRecipientBankBranch}
+            setRecipientName={setRecipientName}
+            setRecipientPlatform={setRecipientPlatform}
             setSelectedBillId={setSelectedBillId}
             setSelectedPayableId={setSelectedPayableId}
+            setSelectedPaymentRecipientId={setSelectedPaymentRecipientId}
             statusDisabledReason={actionBlockReason("payable.settle")}
           />
         ) : null}
@@ -3015,6 +3335,7 @@ function CustomersModule({
   customerFullName,
   customerName,
   customers,
+  deleteCustomer,
   disabledReason,
   editingCustomer,
   openCreateCustomerDialog,
@@ -3031,6 +3352,7 @@ function CustomersModule({
   customerFullName: string;
   customerName: string;
   customers: Customer[];
+  deleteCustomer: (customer: Customer) => void;
   disabledReason: string;
   editingCustomer?: Customer;
   openCreateCustomerDialog: () => void;
@@ -3081,16 +3403,28 @@ function CustomersModule({
                   {customer.fullName ?? customer.name}
                 </td>
                 <td>
-                  <button
-                    disabled={Boolean(disabledReason)}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openEditCustomerDialog(customer);
-                    }}
-                    type="button"
-                  >
-                    编辑
-                  </button>
+                  <div className="row-actions">
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openEditCustomerDialog(customer);
+                      }}
+                      type="button"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      disabled={Boolean(disabledReason)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteCustomer(customer);
+                      }}
+                      type="button"
+                    >
+                      删除
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -3385,8 +3719,11 @@ function SigningEntitiesModule({
 }
 
 function ContractsModule({
+  attachmentPreview,
   closeContractDialog,
+  closeContractDetail,
   contractCode,
+  contractDetailOpen,
   contractDialogOpen,
   contractEndDate,
   contractFee,
@@ -3399,11 +3736,15 @@ function ContractsModule({
   contracts,
   createContract,
   customers,
+  deleteContract,
   disabledReason,
   editingContract,
+  openAttachmentPreview,
   openCreateContractDialog,
+  openContractDetail,
   openEditContractDialog,
   selectedCustomerId,
+  selectedContract,
   selectedContractId,
   setContractEndDate,
   setContractFee,
@@ -3419,8 +3760,11 @@ function ContractsModule({
   signingEntities,
   updateContractFiles,
 }: {
+  attachmentPreview: { attachment: Attachment; url: string } | null;
   closeContractDialog: () => void;
+  closeContractDetail: () => void;
   contractCode: string;
+  contractDetailOpen: boolean;
   contractDialogOpen: boolean;
   contractEndDate: string;
   contractFee: string;
@@ -3433,11 +3777,15 @@ function ContractsModule({
   contracts: Contract[];
   createContract: (event: FormEvent<HTMLFormElement>) => void;
   customers: Customer[];
+  deleteContract: (contract: Contract) => void;
   disabledReason: string;
   editingContract?: Contract;
+  openAttachmentPreview: (attachment: Attachment) => void;
   openCreateContractDialog: () => void;
+  openContractDetail: (contract: Contract) => void;
   openEditContractDialog: (contract: Contract) => void;
   selectedCustomerId: string;
+  selectedContract?: Contract;
   selectedContractId: string;
   setContractEndDate: (value: string) => void;
   setContractFee: (value: string) => void;
@@ -3479,10 +3827,7 @@ function ContractsModule({
               <th>客户简称</th>
               <th>我方签约主体</th>
               <th>合同周期</th>
-              <th>基础费用</th>
-              <th>激励单价</th>
-              <th>服务费比例</th>
-              <th>阶梯规则</th>
+              <th>费用规则</th>
               <th>合同附件</th>
               <th>状态</th>
               <th>操作</th>
@@ -3500,30 +3845,52 @@ function ContractsModule({
                   <td>{contract.code}</td>
                   <td>{contract.customer?.name ?? "-"}</td>
                   <td>{contract.signingEntity?.shortName ?? "-"}</td>
-                  <td className="wrap-cell">{contractPeriod(contract)}</td>
-                  <td>{moneyText(contractBaseFee(contract))}</td>
-                  <td>{moneyText(contract.incentiveUnitPrice)}</td>
-                  <td>{rateText(contract.serviceFeeRate)}</td>
-                  <td className="wrap-cell">{contractTierSummary(contract)}</td>
-                  <td className="wrap-cell">
+                  <td>{contractPeriod(contract)}</td>
+                  <td className="truncate-cell">
+                    基础 {moneyText(contractBaseFee(contract))} / 激励{" "}
+                    {moneyText(contract.incentiveUnitPrice)} / 服务费{" "}
+                    {rateText(contract.serviceFeeRate)}
+                  </td>
+                  <td>
                     {attachments.length > 0
-                      ? attachments.map((item) => item.fileName).join("、")
-                      : "-"}
+                      ? `${attachments.length} 个附件`
+                      : "未上传"}
                   </td>
                   <td>
                     <span className="status">{contractStatus(contract)}</span>
                   </td>
                   <td>
-                    <button
-                      disabled={Boolean(disabledReason)}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        openEditContractDialog(contract);
-                      }}
-                      type="button"
-                    >
-                      编辑
-                    </button>
+                    <div className="row-actions">
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openContractDetail(contract);
+                        }}
+                        type="button"
+                      >
+                        查看
+                      </button>
+                      <button
+                        disabled={Boolean(disabledReason)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openEditContractDialog(contract);
+                        }}
+                        type="button"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        disabled={Boolean(disabledReason)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteContract(contract);
+                        }}
+                        type="button"
+                      >
+                        删除
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -3702,6 +4069,131 @@ function ContractsModule({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {contractDetailOpen && selectedContract ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeContractDetail}
+          role="dialog"
+        >
+          <div
+            className="modal-panel wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>合同详情</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeContractDetail}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="definition-list compact">
+              <div>
+                <span>合同编号</span>
+                <strong>{selectedContract.code}</strong>
+              </div>
+              <div>
+                <span>客户简称</span>
+                <strong>{selectedContract.customer?.name ?? "-"}</strong>
+              </div>
+              <div>
+                <span>我方签约主体</span>
+                <strong>
+                  {selectedContract.signingEntity?.shortName ?? "-"}
+                </strong>
+              </div>
+              <div>
+                <span>合同周期</span>
+                <strong>{contractPeriod(selectedContract)}</strong>
+              </div>
+              <div>
+                <span>基础费用</span>
+                <strong>{moneyText(contractBaseFee(selectedContract))}</strong>
+              </div>
+              <div>
+                <span>激励单价</span>
+                <strong>
+                  {moneyText(selectedContract.incentiveUnitPrice)}
+                </strong>
+              </div>
+              <div>
+                <span>服务费比例</span>
+                <strong>{rateText(selectedContract.serviceFeeRate)}</strong>
+              </div>
+              <div>
+                <span>阶梯规则</span>
+                <strong>
+                  {tierModeText(selectedContract.tierMode ?? "NONE")}
+                </strong>
+              </div>
+              {selectedContract.tierRules?.[0]?.description ? (
+                <div>
+                  <span>规则描述</span>
+                  <strong>{selectedContract.tierRules[0].description}</strong>
+                </div>
+              ) : null}
+              <div>
+                <span>状态</span>
+                <strong>{contractStatus(selectedContract)}</strong>
+              </div>
+            </div>
+            <div className="attachment-list">
+              {(selectedContract.attachments ?? []).length > 0 ? (
+                selectedContract.attachments?.map((attachment) => (
+                  <button
+                    className="attachment-row"
+                    key={attachment.id}
+                    onClick={() => openAttachmentPreview(attachment)}
+                    type="button"
+                  >
+                    <span>{attachment.fileName}</span>
+                    <strong>合同附件</strong>
+                    <small>{dateTimeText(attachment.createdAt)}</small>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">暂无合同附件</div>
+              )}
+            </div>
+            {attachmentPreview ? (
+              <div className="attachment-preview">
+                <div className="panel-header">
+                  <h2>{attachmentPreview.attachment.fileName}</h2>
+                  <a
+                    href={attachmentPreview.url}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    下载
+                  </a>
+                </div>
+                {isPreviewableAttachment(attachmentPreview.attachment) ? (
+                  attachmentPreview.attachment.contentType?.startsWith(
+                    "image/",
+                  ) ? (
+                    <img
+                      alt={attachmentPreview.attachment.fileName}
+                      src={attachmentPreview.url}
+                    />
+                  ) : (
+                    <iframe
+                      src={attachmentPreview.url}
+                      title={attachmentPreview.attachment.fileName}
+                    />
+                  )
+                ) : (
+                  <div className="empty-state">该附件请下载查看</div>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -4153,10 +4645,15 @@ function CostPayableModule({
   closePayableAttachmentsDialog,
   closePayableDialog,
   closePayableStatusDialog,
+  closeRecipientDialog,
   createCostPayable,
+  deletePaymentRecipient,
   disabledReason,
+  editingRecipient,
   openAttachmentPreview,
   openCreatePayableDialog,
+  openCreateRecipientDialog,
+  openEditRecipientDialog,
   openPayableAttachmentsDialog,
   openPayableStatusDialog,
   payableAmount,
@@ -4169,21 +4666,37 @@ function CostPayableModule({
   payableStatusFiles,
   payableStatusTarget,
   payableTab,
-  payableVendorName,
+  payableRecipientSearch,
   payables,
+  paymentRecipients,
+  recipientAccountName,
+  recipientAccountNo,
+  recipientBankBranch,
+  recipientDialogOpen,
+  recipientName,
+  recipientPlatform,
   savePayableStatus,
+  savePaymentRecipient,
   selectedBillId,
   selectedPayable,
   selectedPayableId,
+  selectedPaymentRecipient,
+  selectedPaymentRecipientId,
   setPayableAmount,
   setPayablePaymentAccount,
+  setPayableRecipientSearch,
   setPayableRemarks,
   setPayableStatusFiles,
   setPayableStatusTarget,
   setPayableTab,
-  setPayableVendorName,
+  setRecipientAccountName,
+  setRecipientAccountNo,
+  setRecipientBankBranch,
+  setRecipientName,
+  setRecipientPlatform,
   setSelectedBillId,
   setSelectedPayableId,
+  setSelectedPaymentRecipientId,
   statusDisabledReason,
 }: {
   attachmentPreview: { attachment: Attachment; url: string } | null;
@@ -4191,10 +4704,15 @@ function CostPayableModule({
   closePayableAttachmentsDialog: () => void;
   closePayableDialog: () => void;
   closePayableStatusDialog: () => void;
+  closeRecipientDialog: () => void;
   createCostPayable: (event: FormEvent<HTMLFormElement>) => void;
+  deletePaymentRecipient: (recipient: PaymentRecipient) => void;
   disabledReason: string;
+  editingRecipient?: PaymentRecipient;
   openAttachmentPreview: (attachment: Attachment) => void;
   openCreatePayableDialog: () => void;
+  openCreateRecipientDialog: () => void;
+  openEditRecipientDialog: (recipient: PaymentRecipient) => void;
   openPayableAttachmentsDialog: (payable: Payable) => void;
   openPayableStatusDialog: (payable: Payable) => void;
   payableAmount: string;
@@ -4206,28 +4724,68 @@ function CostPayableModule({
   payableStatusDialogOpen: boolean;
   payableStatusFiles: File[];
   payableStatusTarget: string;
-  payableTab: "open" | "paid";
-  payableVendorName: string;
+  payableTab: "bills" | "recipients";
+  payableRecipientSearch: string;
   payables: Payable[];
+  paymentRecipients: PaymentRecipient[];
+  recipientAccountName: string;
+  recipientAccountNo: string;
+  recipientBankBranch: string;
+  recipientDialogOpen: boolean;
+  recipientName: string;
+  recipientPlatform: PaymentRecipientPlatform;
   savePayableStatus: (event: FormEvent<HTMLFormElement>) => void;
+  savePaymentRecipient: (event: FormEvent<HTMLFormElement>) => void;
   selectedBillId: string;
   selectedPayable?: Payable;
   selectedPayableId: string;
+  selectedPaymentRecipient?: PaymentRecipient;
+  selectedPaymentRecipientId: string;
   setPayableAmount: (value: string) => void;
   setPayablePaymentAccount: (value: string) => void;
+  setPayableRecipientSearch: (value: string) => void;
   setPayableRemarks: (value: string) => void;
   setPayableStatusFiles: (fileList: FileList | null) => void;
   setPayableStatusTarget: (value: string) => void;
-  setPayableTab: (value: "open" | "paid") => void;
-  setPayableVendorName: (value: string) => void;
+  setPayableTab: (value: "bills" | "recipients") => void;
+  setRecipientAccountName: (value: string) => void;
+  setRecipientAccountNo: (value: string) => void;
+  setRecipientBankBranch: (value: string) => void;
+  setRecipientName: (value: string) => void;
+  setRecipientPlatform: (value: PaymentRecipientPlatform) => void;
   setSelectedBillId: (value: string) => void;
   setSelectedPayableId: (value: string) => void;
+  setSelectedPaymentRecipientId: (value: string) => void;
   statusDisabledReason: string;
 }) {
-  const visiblePayables = payables.filter((payable) =>
-    payableTab === "paid"
-      ? payable.status === "PAID"
-      : payable.status === "UNPAID" || payable.status === "PARTIALLY_PAID",
+  const [recipientListSearch, setRecipientListSearch] = useState("");
+  const matchRecipient = (recipient: PaymentRecipient, keyword: string) => {
+    if (!keyword) {
+      return true;
+    }
+    const fields = [
+      recipient.name,
+      paymentRecipientPlatformText[recipient.platform],
+      recipient.accountName,
+      recipient.accountNo,
+      recipient.bankBranch ?? "",
+    ];
+    return fields.some((field) => field.toLowerCase().includes(keyword));
+  };
+  const payableRecipientKeyword = payableRecipientSearch.trim().toLowerCase();
+  const recipientListKeyword = recipientListSearch.trim().toLowerCase();
+  const matchedPayableRecipients = paymentRecipients.filter((recipient) =>
+    matchRecipient(recipient, payableRecipientKeyword),
+  );
+  const payableRecipientOptions =
+    selectedPaymentRecipient &&
+    !matchedPayableRecipients.some(
+      (recipient) => recipient.id === selectedPaymentRecipient.id,
+    )
+      ? [selectedPaymentRecipient, ...matchedPayableRecipients]
+      : matchedPayableRecipients;
+  const visibleRecipients = paymentRecipients.filter((recipient) =>
+    matchRecipient(recipient, recipientListKeyword),
   );
   const nextStatus = selectedPayable
     ? nextPayableStatus(selectedPayable.status)
@@ -4240,94 +4798,169 @@ function CostPayableModule({
           <button
             className="primary"
             disabled={Boolean(disabledReason)}
-            onClick={openCreatePayableDialog}
+            onClick={
+              payableTab === "recipients"
+                ? openCreateRecipientDialog
+                : openCreatePayableDialog
+            }
             type="button"
           >
-            新增成本应付
+            {payableTab === "recipients" ? "新增收款人" : "新增成本应付"}
           </button>
         }
-        count={`${visiblePayables.length} 条`}
-        title="成本应付列表"
+        count={
+          payableTab === "recipients"
+            ? `${visibleRecipients.length} 个`
+            : `${payables.length} 条`
+        }
+        title={payableTab === "recipients" ? "收款人列表" : "成本应付列表"}
       >
         {disabledReason ? (
           <div className="inline-notice">{disabledReason}</div>
         ) : null}
         <div className="sub-tabs">
           <button
-            data-active={payableTab === "open"}
-            onClick={() => setPayableTab("open")}
+            data-active={payableTab === "bills"}
+            onClick={() => setPayableTab("bills")}
             type="button"
           >
             应付账单
           </button>
           <button
-            data-active={payableTab === "paid"}
-            onClick={() => setPayableTab("paid")}
+            data-active={payableTab === "recipients"}
+            onClick={() => setPayableTab("recipients")}
             type="button"
           >
-            已付账单
+            收款人
           </button>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>收款方</th>
-              <th>关联账单</th>
-              <th>客户</th>
-              <th>月份</th>
-              <th>应付金额</th>
-              <th>状态</th>
-              <th>附件</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visiblePayables.map((payable) => (
-              <tr
-                data-selected={selectedPayableId === payable.id}
-                key={payable.id}
-                onClick={() => setSelectedPayableId(payable.id)}
-              >
-                <td>{payable.vendorName}</td>
-                <td>{payable.bill?.billNo ?? "-"}</td>
-                <td>{payable.customer?.name ?? "-"}</td>
-                <td>
-                  {payable.periodMonth ?? payable.bill?.periodMonth ?? "-"}
-                </td>
-                <td>{money(payable.amount)}</td>
-                <td>
-                  {nextPayableStatus(payable.status) ? (
+        {payableTab === "bills" ? (
+          <table>
+            <thead>
+              <tr>
+                <th>收款方</th>
+                <th>收款账户</th>
+                <th>关联账单</th>
+                <th>客户</th>
+                <th>月份</th>
+                <th>应付金额</th>
+                <th>状态</th>
+                <th>附件</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payables.map((payable) => (
+                <tr
+                  data-selected={selectedPayableId === payable.id}
+                  key={payable.id}
+                  onClick={() => setSelectedPayableId(payable.id)}
+                >
+                  <td>{payable.vendorName}</td>
+                  <td className="truncate-cell">
+                    {payableAccountText(payable) || "-"}
+                  </td>
+                  <td>{payable.bill?.billNo ?? "-"}</td>
+                  <td>{payable.customer?.name ?? "-"}</td>
+                  <td>
+                    {payable.periodMonth ?? payable.bill?.periodMonth ?? "-"}
+                  </td>
+                  <td>{money(payable.amount)}</td>
+                  <td>
+                    {nextPayableStatus(payable.status) ? (
+                      <button
+                        className="status status-button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openPayableStatusDialog(payable);
+                        }}
+                        type="button"
+                      >
+                        {payableStatusText[payable.status] ?? payable.status}
+                      </button>
+                    ) : (
+                      <span className="status">
+                        {payableStatusText[payable.status] ?? payable.status}
+                      </span>
+                    )}
+                  </td>
+                  <td>
                     <button
-                      className="status status-button"
+                      className="link-button"
                       onClick={(event) => {
                         event.stopPropagation();
-                        openPayableStatusDialog(payable);
+                        openPayableAttachmentsDialog(payable);
                       }}
                       type="button"
                     >
-                      {payableStatusText[payable.status] ?? payable.status}
+                      查看附件
                     </button>
-                  ) : (
-                    <span className="status">
-                      {payableStatusText[payable.status] ?? payable.status}
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <button
-                    className="link-button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openPayableAttachmentsDialog(payable);
-                    }}
-                    type="button"
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <>
+            <div className="table-toolbar">
+              <input
+                onChange={(event) => setRecipientListSearch(event.target.value)}
+                placeholder="搜索收款方、账户名、账号、支行"
+                value={recipientListSearch}
+              />
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>收款方名称</th>
+                  <th>收款平台</th>
+                  <th>账户名</th>
+                  <th>账号</th>
+                  <th>银行支行</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRecipients.map((recipient) => (
+                  <tr
+                    data-selected={selectedPaymentRecipientId === recipient.id}
+                    key={recipient.id}
+                    onClick={() => setSelectedPaymentRecipientId(recipient.id)}
                   >
-                    查看附件
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    <td>{recipient.name}</td>
+                    <td>{paymentRecipientPlatformText[recipient.platform]}</td>
+                    <td>{recipient.accountName}</td>
+                    <td>{recipient.accountNo}</td>
+                    <td>{recipient.bankBranch ?? "-"}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          disabled={Boolean(disabledReason)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openEditRecipientDialog(recipient);
+                          }}
+                          type="button"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          disabled={Boolean(disabledReason)}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            deletePaymentRecipient(recipient);
+                          }}
+                          type="button"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
       </TablePanel>
 
       {payableDialogOpen ? (
@@ -4368,12 +5001,42 @@ function CostPayableModule({
                 </select>
               </label>
               <label>
-                收款方
+                收款方搜索
                 <input
-                  onChange={(event) => setPayableVendorName(event.target.value)}
-                  value={payableVendorName}
+                  onChange={(event) =>
+                    setPayableRecipientSearch(event.target.value)
+                  }
+                  placeholder="输入收款方、账户名、账号或支行"
+                  value={payableRecipientSearch}
                 />
               </label>
+              <label>
+                收款方
+                <select
+                  onChange={(event) =>
+                    setSelectedPaymentRecipientId(event.target.value)
+                  }
+                  value={selectedPaymentRecipientId}
+                >
+                  <option value="">选择已有收款人</option>
+                  {payableRecipientOptions.map((recipient) => (
+                    <option key={recipient.id} value={recipient.id}>
+                      {recipient.name} ·{" "}
+                      {paymentRecipientAccountText(recipient)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="definition-list compact">
+                <div>
+                  <span>收款账户</span>
+                  <strong>
+                    {selectedPaymentRecipient
+                      ? paymentRecipientAccountText(selectedPaymentRecipient)
+                      : "-"}
+                  </strong>
+                </div>
+              </div>
               <label>
                 应付金额
                 <input
@@ -4395,6 +5058,102 @@ function CostPayableModule({
                 </button>
                 <button className="primary" type="submit">
                   创建应付
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {recipientDialogOpen ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeRecipientDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>{editingRecipient ? "编辑收款人" : "新增收款人"}</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeRecipientDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={savePaymentRecipient}>
+              <label>
+                收款方名称
+                <input
+                  onChange={(event) => setRecipientName(event.target.value)}
+                  value={recipientName}
+                />
+              </label>
+              <label>
+                收款平台
+                <select
+                  onChange={(event) =>
+                    setRecipientPlatform(
+                      event.target.value as PaymentRecipientPlatform,
+                    )
+                  }
+                  value={recipientPlatform}
+                >
+                  {Object.entries(paymentRecipientPlatformText).map(
+                    ([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
+              <label>
+                账户名
+                <input
+                  onChange={(event) =>
+                    setRecipientAccountName(event.target.value)
+                  }
+                  value={recipientAccountName}
+                />
+              </label>
+              <label>
+                账号
+                <input
+                  onChange={(event) =>
+                    setRecipientAccountNo(event.target.value)
+                  }
+                  value={recipientAccountNo}
+                />
+              </label>
+              <label>
+                银行支行
+                <input
+                  onChange={(event) =>
+                    setRecipientBankBranch(event.target.value)
+                  }
+                  value={recipientBankBranch}
+                />
+              </label>
+              {disabledReason ? (
+                <small className="form-note">{disabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeRecipientDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(disabledReason)}
+                  type="submit"
+                >
+                  {editingRecipient ? "保存修改" : "创建收款人"}
                 </button>
               </div>
             </form>
@@ -4431,6 +5190,10 @@ function CostPayableModule({
                   <strong>{selectedPayable.vendorName}</strong>
                 </div>
                 <div>
+                  <span>收款账户</span>
+                  <strong>{payableAccountText(selectedPayable) || "-"}</strong>
+                </div>
+                <div>
                   <span>当前状态</span>
                   <strong>
                     {payableStatusText[selectedPayable.status] ??
@@ -4453,17 +5216,19 @@ function CostPayableModule({
                   ) : null}
                 </select>
               </label>
+              {payableStatusTarget === "PAID" ? (
+                <label>
+                  付款账户
+                  <input
+                    onChange={(event) =>
+                      setPayablePaymentAccount(event.target.value)
+                    }
+                    value={payablePaymentAccount}
+                  />
+                </label>
+              ) : null}
               <label>
-                付款账户
-                <input
-                  onChange={(event) =>
-                    setPayablePaymentAccount(event.target.value)
-                  }
-                  value={payablePaymentAccount}
-                />
-              </label>
-              <label>
-                状态附件
+                文件/截图
                 <input
                   accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
                   multiple

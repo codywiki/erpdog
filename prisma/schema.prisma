@@ -81,9 +81,17 @@ enum ReceiptStatus {
 
 enum PayableStatus {
   UNPAID
+  CONFIRMED
   PARTIALLY_PAID
   PAID
   VOIDED
+}
+
+enum PaymentRecipientPlatform {
+  PRIVATE_BANK
+  CORPORATE_BANK
+  WECHAT
+  ALIPAY
 }
 
 enum PaymentRequestStatus {
@@ -130,6 +138,7 @@ model Organization {
   costCategories         CostCategory[]
   costEntries            CostEntry[]
   payables               Payable[]
+  paymentRecipients      PaymentRecipient[]
   paymentRequests        PaymentRequest[]
   payments               Payment[]
   periodClosings         PeriodClosing[]
@@ -809,35 +818,64 @@ model CostEntry {
 }
 
 model Payable {
-  id          String        @id @default(uuid())
-  orgId       String        @map("org_id")
-  customerId  String?       @map("customer_id")
-  billId      String?       @map("bill_id")
-  costEntryId String?       @map("cost_entry_id")
-  categoryId  String?       @map("category_id")
-  vendorName  String        @map("vendor_name")
-  periodMonth String?       @map("period_month")
-  amount      Decimal       @db.Decimal(18, 2)
-  paidAmount  Decimal       @default(0) @map("paid_amount") @db.Decimal(18, 2)
-  status      PayableStatus @default(UNPAID)
-  dueDate     DateTime?     @map("due_date")
-  remarks     String?
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  id                   String                    @id @default(uuid())
+  orgId                String                    @map("org_id")
+  customerId           String?                   @map("customer_id")
+  billId               String?                   @map("bill_id")
+  costEntryId          String?                   @map("cost_entry_id")
+  categoryId           String?                   @map("category_id")
+  paymentRecipientId   String?                   @map("payment_recipient_id")
+  vendorName           String                    @map("vendor_name")
+  receiptPlatform      PaymentRecipientPlatform  @default(PRIVATE_BANK) @map("receipt_platform")
+  receiptAccountName   String                    @default("") @map("receipt_account_name")
+  receiptAccountNo     String                    @default("") @map("receipt_account_no")
+  receiptBankBranch    String?                   @map("receipt_bank_branch")
+  periodMonth          String?                   @map("period_month")
+  amount               Decimal                   @db.Decimal(18, 2)
+  paidAmount           Decimal                   @default(0) @map("paid_amount") @db.Decimal(18, 2)
+  status               PayableStatus             @default(UNPAID)
+  dueDate              DateTime?                 @map("due_date")
+  remarks              String?
+  createdAt            DateTime                  @default(now()) @map("created_at")
+  updatedAt            DateTime                  @updatedAt @map("updated_at")
 
   org                 Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
   customer            Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
   bill                Bill?                @relation(fields: [billId], references: [id], onDelete: SetNull)
   costEntry           CostEntry?           @relation(fields: [costEntryId], references: [id], onDelete: SetNull)
   category            CostCategory?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  paymentRecipient    PaymentRecipient?    @relation(fields: [paymentRecipientId], references: [id], onDelete: SetNull)
   paymentRequestItems PaymentRequestItem[]
   paymentAllocations  PaymentAllocation[]
 
   @@index([orgId, periodMonth])
   @@index([customerId, periodMonth])
   @@index([billId])
+  @@index([paymentRecipientId])
   @@index([status])
   @@map("payables")
+}
+
+model PaymentRecipient {
+  id                String                   @id @default(uuid())
+  orgId             String                   @map("org_id")
+  name              String
+  platform          PaymentRecipientPlatform
+  accountName       String                   @map("account_name")
+  accountNo         String                   @map("account_no")
+  bankBranch        String?                  @map("bank_branch")
+  isActive          Boolean                  @default(true) @map("is_active")
+  createdAt         DateTime                 @default(now()) @map("created_at")
+  updatedAt         DateTime                 @updatedAt @map("updated_at")
+
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
+  payables Payable[]
+
+  @@index([orgId, isActive])
+  @@index([name])
+  @@index([accountName])
+  @@index([accountNo])
+  @@map("payment_recipients")
 }
 
 model PaymentRequest {

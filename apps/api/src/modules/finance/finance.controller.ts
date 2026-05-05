@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
 import { ApiBearerAuth, ApiTags } from "@nestjs/swagger";
 
 import { PERMISSION_CODES, type AuthenticatedUser } from "@erpdog/contracts";
@@ -165,6 +174,45 @@ export class FinanceController {
     return this.finance.createCostEntry(user, body);
   }
 
+  @Get("payment-recipients")
+  @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
+  listPaymentRecipients(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("q") q?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+  ) {
+    return this.finance.listPaymentRecipients(user, { q, page, pageSize });
+  }
+
+  @Post("payment-recipients")
+  @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
+  createPaymentRecipient(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: Payload,
+  ) {
+    return this.finance.createPaymentRecipient(user, body);
+  }
+
+  @Patch("payment-recipients/:id")
+  @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
+  updatePaymentRecipient(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.finance.updatePaymentRecipient(user, id, body);
+  }
+
+  @Delete("payment-recipients/:id")
+  @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
+  removePaymentRecipient(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+  ) {
+    return this.finance.removePaymentRecipient(user, id);
+  }
+
   @Get("payables")
   @RequirePermissions(
     PERMISSION_CODES.COST_MANAGE,
@@ -184,6 +232,16 @@ export class FinanceController {
   @RequirePermissions(PERMISSION_CODES.COST_MANAGE)
   createPayable(@CurrentUser() user: AuthenticatedUser, @Body() body: Payload) {
     return this.finance.createPayable(user, body);
+  }
+
+  @Post("payables/:id/confirm")
+  @RequirePermissions(PERMISSION_CODES.PAYABLE_SETTLE)
+  confirmPayable(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id") id: string,
+    @Body() body: Payload,
+  ) {
+    return this.finance.confirmPayable(user, id, body);
   }
 
   @Get("payment-requests")
