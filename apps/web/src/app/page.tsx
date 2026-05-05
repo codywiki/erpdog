@@ -469,6 +469,11 @@ function translateErrorMessage(message: string) {
   if (/You cannot grant one or more permissions/i.test(message)) {
     return "当前账号不能分配其中一个或多个权限。";
   }
+  if (
+    /Only tenant owners can receive user management permission/i.test(message)
+  ) {
+    return "只有租户管理员和总负责人角色可以拥有用户管理权限。";
+  }
   if (/Invalid email or password/i.test(message)) {
     return "账号或密码不正确。";
   }
@@ -1190,8 +1195,8 @@ export default function Home() {
     if (permissions.includes("tenant.manage")) {
       return isSuperAdmin;
     }
-    if (permissions.includes("user.manage") && hasTenantIdentityAccess) {
-      return true;
+    if (permissions.includes("user.manage")) {
+      return hasTenantIdentityAccess;
     }
     return (
       user?.permissions.some((permission) =>
@@ -1399,8 +1404,8 @@ export default function Home() {
       if (permissions.includes("tenant.manage")) {
         return nextIsSuperAdmin;
       }
-      if (permissions.includes("user.manage") && nextHasTenantIdentityAccess) {
-        return true;
+      if (permissions.includes("user.manage")) {
+        return nextHasTenantIdentityAccess;
       }
       return (
         nextUser?.permissions.some((permission) =>
@@ -1728,7 +1733,10 @@ export default function Home() {
         roleCodes.every((roleCode) =>
           tenantAdminDelegatedRoleCodes.includes(roleCode),
         )) ||
-      roleCodes.every((roleCode) => ownerDelegatedRoleCodes.includes(roleCode));
+      (userRoleCodes.includes("owner") &&
+        roleCodes.every((roleCode) =>
+          ownerDelegatedRoleCodes.includes(roleCode),
+        ));
     if (!canManageUserRoles) {
       setMessage(
         userRoleCodes.includes("admin")
@@ -1769,7 +1777,10 @@ export default function Home() {
         roleCodes.every((roleCode) =>
           tenantAdminDelegatedRoleCodes.includes(roleCode),
         )) ||
-      roleCodes.every((roleCode) => ownerDelegatedRoleCodes.includes(roleCode));
+      (userRoleCodes.includes("owner") &&
+        roleCodes.every((roleCode) =>
+          ownerDelegatedRoleCodes.includes(roleCode),
+        ));
     if (!canManageUserRoles) {
       setMessage(
         userRoleCodes.includes("admin")

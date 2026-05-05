@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { ExtraChargeKind, Prisma } from "@prisma/client";
 
 import {
   PERMISSION_CODES,
@@ -134,6 +134,23 @@ const tenantRoleDefinitions = [
       PERMISSION_CODES.PAYMENT_REQUEST_CREATE,
     ],
   },
+];
+
+const extraChargeCategories = [
+  { code: "value-added", name: "增值服务", kind: ExtraChargeKind.VALUE_ADDED },
+  {
+    code: "advance-payment",
+    name: "代垫费用",
+    kind: ExtraChargeKind.ADVANCE_PAYMENT,
+  },
+];
+
+const costCategories = [
+  { code: "labor", name: "人工成本" },
+  { code: "outsourcing", name: "外包服务" },
+  { code: "advance-payment", name: "代垫支出" },
+  { code: "software", name: "软件和工具" },
+  { code: "other", name: "其他成本" },
 ];
 
 @Injectable()
@@ -341,6 +358,7 @@ export class PlatformService {
         },
       });
       await this.ensureTenantRoles(tx, tenant.id);
+      await this.ensureTenantCatalogs(tx, tenant.id);
       const adminRole = await tx.role.findUniqueOrThrow({
         where: {
           orgId_code: {
@@ -598,6 +616,55 @@ export class PlatformService {
           permissionId: permission.id,
         })),
         skipDuplicates: true,
+      });
+    }
+  }
+
+  private async ensureTenantCatalogs(
+    tx: Prisma.TransactionClient,
+    orgId: string,
+  ) {
+    for (const category of extraChargeCategories) {
+      await tx.extraChargeCategory.upsert({
+        where: {
+          orgId_code: {
+            orgId,
+            code: category.code,
+          },
+        },
+        update: {
+          name: category.name,
+          kind: category.kind,
+          isActive: true,
+        },
+        create: {
+          orgId,
+          code: category.code,
+          name: category.name,
+          kind: category.kind,
+          isActive: true,
+        },
+      });
+    }
+
+    for (const category of costCategories) {
+      await tx.costCategory.upsert({
+        where: {
+          orgId_code: {
+            orgId,
+            code: category.code,
+          },
+        },
+        update: {
+          name: category.name,
+          isActive: true,
+        },
+        create: {
+          orgId,
+          code: category.code,
+          name: category.name,
+          isActive: true,
+        },
       });
     }
   }

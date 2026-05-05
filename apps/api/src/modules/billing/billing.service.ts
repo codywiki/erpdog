@@ -57,6 +57,10 @@ type BillWithDetails = Prisma.BillGetPayload<{
   include: ReturnType<BillingService["billInclude"]>;
 }>;
 
+type BillSummary = Prisma.BillGetPayload<{
+  include: ReturnType<BillingService["billSummaryInclude"]>;
+}>;
+
 const cooperationModeOptions = new Set([
   "一口价投放",
   "代结算",
@@ -253,7 +257,7 @@ export class BillingService {
     const [bills, total] = await this.prisma.$transaction([
       this.prisma.bill.findMany({
         where,
-        include: this.billInclude(),
+        include: this.billSummaryInclude(),
         orderBy: [{ periodMonth: "desc" }, { createdAt: "desc" }],
         skip: pagination.skip,
         take: pagination.take,
@@ -262,7 +266,7 @@ export class BillingService {
     ]);
 
     return paginated(
-      bills.map((bill) => this.presentBill(bill)),
+      bills.map((bill) => this.presentBillSummary(bill)),
       total,
       pagination,
     );
@@ -1239,6 +1243,71 @@ export class BillingService {
           ? "FULLY_RECEIVED"
           : "PARTIALLY_RECEIVED",
     };
+  }
+
+  private presentBillSummary(bill: BillSummary) {
+    const invoiceAmount = sum(
+      bill.invoiceAllocations
+        .filter((allocation) => allocation.invoice.status !== "VOIDED")
+        .map((allocation) => allocation.amount),
+    );
+    const receiptAmount = sum(
+      bill.receiptAllocations
+        .filter((allocation) => allocation.receipt.status !== "REVERSED")
+        .map((allocation) => allocation.amount),
+    );
+    const total = new Prisma.Decimal(bill.totalAmount);
+
+    return {
+      ...bill,
+      totalAmount: decimalString(total),
+      subtotal: decimalString(bill.subtotal),
+      adjustmentTotal: decimalString(bill.adjustmentTotal),
+      evidenceAttachmentIds: this.jsonStringArray(bill.evidenceAttachmentIds),
+      invoiceAttachmentIds: this.jsonStringArray(bill.invoiceAttachmentIds),
+      receiptAttachmentIds: this.jsonStringArray(bill.receiptAttachmentIds),
+      invoiceAmount: decimalString(invoiceAmount),
+      uninvoicedAmount: decimalString(total.minus(invoiceAmount)),
+      receiptAmount: decimalString(receiptAmount),
+      unreceivedAmount: decimalString(total.minus(receiptAmount)),
+      invoiceState: invoiceAmount.isZero()
+        ? "UNINVOICED"
+        : invoiceAmount.greaterThanOrEqualTo(total)
+          ? "FULLY_INVOICED"
+          : "PARTIALLY_INVOICED",
+      receiptState: receiptAmount.isZero()
+        ? "UNRECEIVED"
+        : receiptAmount.greaterThanOrEqualTo(total)
+          ? "FULLY_RECEIVED"
+          : "PARTIALLY_RECEIVED",
+    };
+  }
+
+  private billSummaryInclude() {
+    return {
+      customer: {
+        select: { id: true, code: true, name: true, fullName: true },
+      },
+      contract: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          signingEntity: {
+            select: {
+              id: true,
+              code: true,
+              shortName: true,
+              fullName: true,
+              legalRepresentative: true,
+              taxpayerType: true,
+            },
+          },
+        },
+      },
+      invoiceAllocations: { include: { invoice: true } },
+      receiptAllocations: { include: { receipt: true } },
+    } satisfies Prisma.BillInclude;
   }
 
   private billInclude() {

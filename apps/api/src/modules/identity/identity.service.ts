@@ -368,7 +368,7 @@ export class IdentityService {
 
     this.ensureRoleManagementAccess(user, [before.code]);
     const permissionCodes = this.permissionCodes(body);
-    this.ensureGrantablePermissions(user, permissionCodes);
+    this.ensureGrantablePermissions(user, before.code, permissionCodes);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const permissions = await tx.permission.findMany({
@@ -501,8 +501,19 @@ export class IdentityService {
 
   private ensureGrantablePermissions(
     user: AuthenticatedUser,
+    roleCode: string,
     permissionCodes: string[],
   ) {
+    if (
+      permissionCodes.includes(PERMISSION_CODES.USER_MANAGE) &&
+      roleCode !== ROLE_CODES.ADMIN &&
+      roleCode !== ROLE_CODES.OWNER
+    ) {
+      throw new ForbiddenException(
+        "Only tenant owners can receive user management permission.",
+      );
+    }
+
     if (this.canManageAllRoles(user)) {
       return;
     }

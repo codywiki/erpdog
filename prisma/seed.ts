@@ -151,49 +151,61 @@ async function main() {
     });
   }
 
-  for (const roleDefinition of roleDefinitions) {
-    const role = await prisma.role.upsert({
-      where: {
-        orgId_code: {
-          orgId: org.id,
-          code: roleDefinition.code,
-        },
-      },
-      update: {
-        name: roleDefinition.name,
-        isSystem: true,
-      },
-      create: {
-        orgId: org.id,
-        code: roleDefinition.code,
-        name: roleDefinition.name,
-        isSystem: true,
-      },
-    });
+  const tenantOrgs = await prisma.organization.findMany({
+    where: { isPlatform: false, isActive: true },
+    select: { id: true },
+  });
+  const tenantOrgIds = Array.from(
+    new Set([org.id, ...tenantOrgs.map((tenantOrg) => tenantOrg.id)]),
+  );
 
-    const permissions = await prisma.permission.findMany({
-      where: { code: { in: roleDefinition.permissions } },
-    });
-    await prisma.rolePermission.deleteMany({
-      where: {
-        roleId: role.id,
-        permissionId: { notIn: permissions.map((permission) => permission.id) },
-      },
-    });
-    for (const permission of permissions) {
-      await prisma.rolePermission.upsert({
+  for (const tenantOrgId of tenantOrgIds) {
+    for (const roleDefinition of roleDefinitions) {
+      const role = await prisma.role.upsert({
         where: {
-          roleId_permissionId: {
+          orgId_code: {
+            orgId: tenantOrgId,
+            code: roleDefinition.code,
+          },
+        },
+        update: {
+          name: roleDefinition.name,
+          isSystem: true,
+        },
+        create: {
+          orgId: tenantOrgId,
+          code: roleDefinition.code,
+          name: roleDefinition.name,
+          isSystem: true,
+        },
+      });
+
+      const permissions = await prisma.permission.findMany({
+        where: { code: { in: roleDefinition.permissions } },
+      });
+      await prisma.rolePermission.deleteMany({
+        where: {
+          roleId: role.id,
+          permissionId: {
+            notIn: permissions.map((permission) => permission.id),
+          },
+        },
+      });
+      for (const permission of permissions) {
+        await prisma.rolePermission.upsert({
+          where: {
+            roleId_permissionId: {
+              roleId: role.id,
+              permissionId: permission.id,
+            },
+          },
+          update: {},
+          create: {
             roleId: role.id,
             permissionId: permission.id,
           },
-        },
-        update: {},
-        create: {
-          roleId: role.id,
-          permissionId: permission.id,
-        },
-      });
+        });
+      }
     }
   }
 
@@ -337,48 +349,50 @@ async function main() {
     },
   });
 
-  for (const category of extraChargeCategories) {
-    await prisma.extraChargeCategory.upsert({
-      where: {
-        orgId_code: {
-          orgId: org.id,
-          code: category.code,
+  for (const tenantOrgId of tenantOrgIds) {
+    for (const category of extraChargeCategories) {
+      await prisma.extraChargeCategory.upsert({
+        where: {
+          orgId_code: {
+            orgId: tenantOrgId,
+            code: category.code,
+          },
         },
-      },
-      update: {
-        name: category.name,
-        kind: category.kind,
-        isActive: true,
-      },
-      create: {
-        orgId: org.id,
-        code: category.code,
-        name: category.name,
-        kind: category.kind,
-        isActive: true,
-      },
-    });
-  }
+        update: {
+          name: category.name,
+          kind: category.kind,
+          isActive: true,
+        },
+        create: {
+          orgId: tenantOrgId,
+          code: category.code,
+          name: category.name,
+          kind: category.kind,
+          isActive: true,
+        },
+      });
+    }
 
-  for (const category of costCategories) {
-    await prisma.costCategory.upsert({
-      where: {
-        orgId_code: {
-          orgId: org.id,
-          code: category.code,
+    for (const category of costCategories) {
+      await prisma.costCategory.upsert({
+        where: {
+          orgId_code: {
+            orgId: tenantOrgId,
+            code: category.code,
+          },
         },
-      },
-      update: {
-        name: category.name,
-        isActive: true,
-      },
-      create: {
-        orgId: org.id,
-        code: category.code,
-        name: category.name,
-        isActive: true,
-      },
-    });
+        update: {
+          name: category.name,
+          isActive: true,
+        },
+        create: {
+          orgId: tenantOrgId,
+          code: category.code,
+          name: category.name,
+          isActive: true,
+        },
+      });
+    }
   }
 
   console.info(`Seeded erpdog tenant admin user: ${adminEmail}`);
