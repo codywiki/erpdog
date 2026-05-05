@@ -846,17 +846,94 @@ tr[data-selected="true"] {
 }
 
 .status {
-  background: #edf2ef;
+  --status-bg: #eef3f0;
+  --status-border: #cfd8d2;
+  --status-dot: #7b8982;
+  --status-text: #34413b;
+  align-items: center;
+  background: var(--status-bg);
+  border: 1px solid var(--status-border);
   border-radius: 999px;
+  color: var(--status-text);
   display: inline-flex;
+  font-feature-settings: "tnum";
   font-size: 12px;
-  padding: 4px 8px;
+  font-weight: 800;
+  gap: 6px;
+  letter-spacing: 0;
+  line-height: 1;
+  min-width: 58px;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.status::before {
+  background: var(--status-dot);
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-dot) 16%, transparent);
+  content: "";
+  height: 6px;
+  width: 6px;
+}
+
+.status--success {
+  --status-bg: #e6f6ee;
+  --status-border: #8bcdb4;
+  --status-dot: var(--accent);
+  --status-text: #075f55;
+}
+
+.status--danger {
+  --status-bg: #fff0f0;
+  --status-border: #eda8a8;
+  --status-dot: #d43f3f;
+  --status-text: #9a2525;
+}
+
+.status--warning {
+  --status-bg: #fff6df;
+  --status-border: #e7bd63;
+  --status-dot: #c97900;
+  --status-text: #7b4900;
+}
+
+.status--info {
+  --status-bg: #edf4ff;
+  --status-border: #a9c4ef;
+  --status-dot: #2f6fbd;
+  --status-text: #24508f;
+}
+
+.status--draft {
+  --status-bg: #f5f7f5;
+  --status-border: #cfd8d2;
+  --status-dot: #7b8982;
+  --status-text: #4a5751;
+}
+
+.status--closed {
+  --status-bg: #eef1ef;
+  --status-border: #c3ccc7;
+  --status-dot: #66736d;
+  --status-text: #3f4b46;
+}
+
+.status--void {
+  --status-bg: #f6eeee;
+  --status-border: #d4b3b3;
+  --status-dot: #9f4b4b;
+  --status-text: #7a3434;
 }
 
 .status-button {
-  border: 1px solid transparent;
-  color: var(--ink);
+  border-color: var(--status-border);
+  color: var(--status-text);
   min-height: 0;
+}
+
+.status-button:hover {
+  border-color: var(--status-dot);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-dot) 12%, transparent);
 }
 
 .link-button {

@@ -742,6 +742,42 @@ function billStatus(value: string) {
   return billStatusText[value] ?? value;
 }
 
+function statusClassName(value: string | boolean | undefined | null) {
+  const status =
+    typeof value === "boolean" ? (value ? "ACTIVE" : "INACTIVE") : value;
+  const toneByStatus: Record<string, string> = {
+    ACTIVE: "status--success",
+    RECEIVED: "status--success",
+    PAID: "status--success",
+    CUSTOMER_CONFIRMED: "status--success",
+    合作中: "status--success",
+    启用: "status--success",
+
+    PENDING_APPROVAL: "status--danger",
+    UNPAID: "status--danger",
+
+    PENDING_SETTLEMENT: "status--warning",
+    PARTIALLY_PAID: "status--warning",
+    ADJUSTED: "status--warning",
+
+    INVOICED: "status--info",
+    CONFIRMED: "status--info",
+    INTERNAL_REVIEW: "status--info",
+    FINANCE_REVIEW: "status--info",
+    CUSTOMER_PENDING: "status--info",
+
+    DRAFT: "status--draft",
+    CLOSED: "status--closed",
+    INACTIVE: "status--closed",
+    已结束: "status--closed",
+    停用: "status--closed",
+
+    VOIDED: "status--void",
+  };
+
+  return `status ${toneByStatus[status ?? ""] ?? "status--neutral"}`;
+}
+
 function nextReceivableStatus(status: string) {
   if (status === "PENDING_APPROVAL") {
     return "PENDING_SETTLEMENT";
@@ -4145,7 +4181,11 @@ function ActivationModule({ apiBase }: { apiBase: string }) {
           </div>
           <div>
             <span>生产状态</span>
-            <strong>已连接 Web/API/Worker/数据库</strong>
+            <strong>
+              <span className={statusClassName("ACTIVE")}>
+                已连接 Web/API/Worker/数据库
+              </span>
+            </strong>
           </div>
         </div>
       </div>
@@ -4229,7 +4269,7 @@ function SuperAdminsModule({
                 <td>{item.name}</td>
                 <td>{item.phone ?? "-"}</td>
                 <td>
-                  <span className="status">
+                  <span className={statusClassName(item.isActive)}>
                     {item.isActive ? "启用" : "停用"}
                   </span>
                 </td>
@@ -4495,7 +4535,7 @@ function TenantsModule({
                   </div>
                 </td>
                 <td>
-                  <span className="status">
+                  <span className={statusClassName(tenant.isActive)}>
                     {tenant.isActive ? "启用" : "停用"}
                   </span>
                 </td>
@@ -4821,7 +4861,7 @@ function IdentityModule({
                 <td>{item.phone ?? item.email}</td>
                 <td>{item.roles.map((role) => role.name).join("、")}</td>
                 <td>
-                  <span className="status">
+                  <span className={statusClassName(item.isActive)}>
                     {item.isActive ? "启用" : "停用"}
                   </span>
                 </td>
@@ -5573,7 +5613,9 @@ function ContractsModule({
                       : "未上传"}
                   </td>
                   <td>
-                    <span className="status">{contractStatus(contract)}</span>
+                    <span className={statusClassName(contractStatus(contract))}>
+                      {contractStatus(contract)}
+                    </span>
                   </td>
                   <td>
                     <div className="row-actions">
@@ -5872,7 +5914,15 @@ function ContractsModule({
               ) : null}
               <div>
                 <span>状态</span>
-                <strong>{contractStatus(selectedContract)}</strong>
+                <strong>
+                  <span
+                    className={statusClassName(
+                      contractStatus(selectedContract),
+                    )}
+                  >
+                    {contractStatus(selectedContract)}
+                  </span>
+                </strong>
               </div>
             </div>
             <div className="attachment-list">
@@ -6233,7 +6283,11 @@ function ReceivableBillingModule({
                 </div>
                 <div>
                   <span>当前状态</span>
-                  <strong>{billStatus(selectedBill.status)}</strong>
+                  <strong>
+                    <span className={statusClassName(selectedBill.status)}>
+                      {billStatus(selectedBill.status)}
+                    </span>
+                  </strong>
                 </div>
               </div>
               <label>
@@ -6606,7 +6660,7 @@ function CostPayableModule({
                   <td>
                     {nextPayableStatus(payable.status) ? (
                       <button
-                        className="status status-button"
+                        className={`${statusClassName(payable.status)} status-button`}
                         onClick={(event) => {
                           event.stopPropagation();
                           openPayableStatusDialog(payable);
@@ -6616,7 +6670,7 @@ function CostPayableModule({
                         {payableStatusText[payable.status] ?? payable.status}
                       </button>
                     ) : (
-                      <span className="status">
+                      <span className={statusClassName(payable.status)}>
                         {payableStatusText[payable.status] ?? payable.status}
                       </span>
                     )}
@@ -6961,8 +7015,10 @@ function CostPayableModule({
                 <div>
                   <span>当前状态</span>
                   <strong>
-                    {payableStatusText[selectedPayable.status] ??
-                      selectedPayable.status}
+                    <span className={statusClassName(selectedPayable.status)}>
+                      {payableStatusText[selectedPayable.status] ??
+                        selectedPayable.status}
+                    </span>
                   </strong>
                 </div>
               </div>
@@ -7151,7 +7207,7 @@ function BillsTable({
             <td>
               {onStatusEdit && nextReceivableStatus(bill.status) ? (
                 <button
-                  className="status status-button"
+                  className={`${statusClassName(bill.status)} status-button`}
                   onClick={(event) => {
                     event.stopPropagation();
                     onStatusEdit(bill);
@@ -7161,7 +7217,9 @@ function BillsTable({
                   {billStatus(bill.status)}
                 </button>
               ) : (
-                <span className="status">{billStatus(bill.status)}</span>
+                <span className={statusClassName(bill.status)}>
+                  {billStatus(bill.status)}
+                </span>
               )}
             </td>
             <td>
