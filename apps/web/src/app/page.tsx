@@ -567,6 +567,12 @@ function translateErrorMessage(message: string) {
   if (/You cannot deactivate your own account/i.test(message)) {
     return "不能停用自己的账号。";
   }
+  if (/You cannot delete your own account/i.test(message)) {
+    return "不能删除自己的账号。";
+  }
+  if (/At least one active super admin is required/i.test(message)) {
+    return "至少需要保留一个启用状态的超级管理员。";
+  }
   if (/password must be at least/i.test(message)) {
     return "初始密码至少需要 10 位。";
   }
@@ -1741,6 +1747,44 @@ export default function Home() {
     );
     setNewUserIsActive(item.isActive);
     setUserDialogOpen(true);
+  }
+
+  function deleteConsoleUser(item: ConsoleUser) {
+    const blockedReason = actionBlockReason("user.manage");
+    if (blockedReason) {
+      setMessage(`删除内部用户失败：${blockedReason}`);
+      return;
+    }
+    if (item.id === user?.id) {
+      setMessage("删除内部用户失败：不能删除当前登录账号。");
+      return;
+    }
+    const roleCodes = item.roles.map((role) => role.code);
+    const canManageUserRoles =
+      (userRoleCodes.includes("admin") &&
+        roleCodes.every((roleCode) =>
+          tenantAdminDelegatedRoleCodes.includes(roleCode),
+        )) ||
+      roleCodes.every((roleCode) => ownerDelegatedRoleCodes.includes(roleCode));
+    if (!canManageUserRoles) {
+      setMessage(
+        userRoleCodes.includes("admin")
+          ? "删除内部用户失败：租户管理员只能删除总负责人、业务负责人和财务角色。"
+          : "删除内部用户失败：总负责人只能删除业务负责人和财务角色。",
+      );
+      return;
+    }
+
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`确认删除内部用户 ${item.name}？`);
+    if (!confirmed) {
+      return;
+    }
+
+    void submitAction("删除内部用户", ["user.manage"], () =>
+      request(`/identity/users/${item.id}`, { method: "DELETE" }),
+    );
   }
 
   function resetSigningEntityForm() {
@@ -3216,6 +3260,7 @@ export default function Home() {
             createConsoleUser={createConsoleUser}
             creatableRoles={creatableRoles}
             currentUserId={user?.id ?? ""}
+            deleteConsoleUser={deleteConsoleUser}
             disabledReason={actionBlockReason("user.manage")}
             editingUser={editingConsoleUser}
             newUserEmail={newUserEmail}
@@ -4652,6 +4697,7 @@ function IdentityModule({
   createConsoleUser,
   creatableRoles,
   currentUserId,
+  deleteConsoleUser,
   disabledReason,
   editingUser,
   newUserEmail,
@@ -4677,6 +4723,7 @@ function IdentityModule({
   createConsoleUser: (event: FormEvent<HTMLFormElement>) => void;
   creatableRoles: Role[];
   currentUserId: string;
+  deleteConsoleUser: (item: ConsoleUser) => void;
   disabledReason: string;
   editingUser?: ConsoleUser;
   newUserEmail: string;
@@ -4759,13 +4806,26 @@ function IdentityModule({
                   </span>
                 </td>
                 <td>
-                  <button
-                    disabled={Boolean(disabledReason) || !canEditUser(item)}
-                    onClick={() => openEditUserDialog(item)}
-                    type="button"
-                  >
-                    编辑
-                  </button>
+                  <div className="row-actions">
+                    <button
+                      disabled={Boolean(disabledReason) || !canEditUser(item)}
+                      onClick={() => openEditUserDialog(item)}
+                      type="button"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      disabled={
+                        Boolean(disabledReason) ||
+                        item.id === currentUserId ||
+                        !canEditUser(item)
+                      }
+                      onClick={() => deleteConsoleUser(item)}
+                      type="button"
+                    >
+                      删除
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

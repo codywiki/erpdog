@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -43,6 +44,11 @@ export class IdentityController {
     @Body() body: Payload,
   ) {
     return this.identity.updateUser(user, id, body);
+  }
+
+  @Delete("identity/users/:id")
+  deleteUser(@CurrentUser() user: AuthenticatedUser, @Param("id") id: string) {
+    return this.identity.deleteUser(user, id);
   }
 
   @Get("identity/roles")

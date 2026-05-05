@@ -274,6 +274,57 @@ export class IdentityService {
     return this.presentUser(updated);
   }
 
+  async deleteUser(user: AuthenticatedUser, id: string) {
+    this.ensureIdentityManagementAccess(user);
+    if (id === user.id) {
+      throw new ConflictException("You cannot delete your own account.");
+    }
+
+    const before = await this.prisma.user.findFirst({
+      where: { id, orgId: user.orgId },
+      include: this.userInclude(),
+    });
+    if (!before) {
+      throw new NotFoundException("User not found.");
+    }
+
+    const beforeRoleCodes = this.roleCodesForUser(before);
+    this.ensureRoleManagementAccess(user, beforeRoleCodes);
+    if (beforeRoleCodes.includes(ROLE_CODES.SUPER_ADMIN)) {
+      const activeSuperAdminCount = await this.prisma.user.count({
+        where: {
+          isActive: true,
+          userRoles: {
+            some: {
+              role: { code: ROLE_CODES.SUPER_ADMIN },
+            },
+          },
+        },
+      });
+      if (activeSuperAdminCount <= 1) {
+        throw new ConflictException(
+          "At least one active super admin is required.",
+        );
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.delete({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          orgId: user.orgId,
+          actorUserId: user.id,
+          action: "user.delete",
+          entityType: "user",
+          entityId: id,
+          before: this.auditUser(before),
+        },
+      });
+    });
+
+    return { id, deleted: true };
+  }
+
   listRoles(user: AuthenticatedUser) {
     this.ensureIdentityManagementAccess(user);
     return this.prisma.role.findMany({
