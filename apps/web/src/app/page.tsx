@@ -2581,13 +2581,6 @@ export default function Home() {
           </div>
         </header>
 
-        <section className="mode-banner">
-          <strong>当前连接正式后端 API</strong>
-          <span>
-            登录后会读取真实数据库数据，创建、审核、结账等操作会写入后端系统。
-          </span>
-        </section>
-
         {loginDialogOpen ? (
           <div
             aria-modal="true"

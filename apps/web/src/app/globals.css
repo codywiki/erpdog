@@ -248,27 +248,6 @@ label {
   white-space: nowrap;
 }
 
-.mode-banner {
-  align-items: center;
-  background: #fff8e8;
-  border: 1px solid #ead8a9;
-  border-radius: var(--radius);
-  color: #5e470d;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  margin-bottom: 14px;
-  padding: 10px 14px;
-}
-
-.mode-banner strong {
-  white-space: nowrap;
-}
-
-.mode-banner span {
-  font-size: 13px;
-}
-
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1048,7 +1027,6 @@ tr[data-selected="true"] {
 
   .topbar,
   .topbar-actions,
-  .mode-banner,
   .panel-header {
     align-items: stretch;
     flex-direction: column;
@@ -1074,9 +1052,5 @@ tr[data-selected="true"] {
   .modal-panel .panel-header {
     align-items: center;
     flex-direction: row;
-  }
-
-  .mode-banner strong {
-    white-space: normal;
   }
 }
