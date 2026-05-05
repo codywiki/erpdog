@@ -1287,6 +1287,13 @@ export default function Home() {
 
     return "";
   };
+  function updatePeriodMonth(value: string) {
+    if (!value) {
+      return;
+    }
+    setPeriodMonth(value);
+  }
+
   function applyConsoleData(data: ConsoleData) {
     setCustomers(data.customers);
     setSigningEntities(data.signingEntities);
@@ -3253,7 +3260,8 @@ export default function Home() {
             <div className="toolbar">
               <input
                 aria-label="账期"
-                onChange={(event) => setPeriodMonth(event.target.value)}
+                onChange={(event) => updatePeriodMonth(event.target.value)}
+                type="month"
                 value={periodMonth}
               />
               <button
@@ -3606,7 +3614,7 @@ export default function Home() {
             }
             setBillStatusTarget={setBillStatusTarget}
             setReceiptAccount={setReceiptAccount}
-            setPeriodMonth={setPeriodMonth}
+            setPeriodMonth={updatePeriodMonth}
             setReceivableAmount={setReceivableAmount}
             setReceivableTab={setReceivableTab}
             setSelectedBillId={setSelectedBillId}
