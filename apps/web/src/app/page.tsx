@@ -930,7 +930,9 @@ export default function Home() {
   const [receivableTab, setReceivableTab] = useState<"open" | "received">(
     "open",
   );
-  const [payableTab, setPayableTab] = useState<"bills" | "recipients">("bills");
+  const [payableTab, setPayableTab] = useState<"bills" | "paid" | "recipients">(
+    "bills",
+  );
   const [receivableAmount, setReceivableAmount] = useState("0.00");
   const [billStatusDialogOpen, setBillStatusDialogOpen] = useState(false);
   const [billStatusTarget, setBillStatusTarget] = useState("");
@@ -4724,7 +4726,7 @@ function CostPayableModule({
   payableStatusDialogOpen: boolean;
   payableStatusFiles: File[];
   payableStatusTarget: string;
-  payableTab: "bills" | "recipients";
+  payableTab: "bills" | "paid" | "recipients";
   payableRecipientSearch: string;
   payables: Payable[];
   paymentRecipients: PaymentRecipient[];
@@ -4747,7 +4749,7 @@ function CostPayableModule({
   setPayableRemarks: (value: string) => void;
   setPayableStatusFiles: (fileList: FileList | null) => void;
   setPayableStatusTarget: (value: string) => void;
-  setPayableTab: (value: "bills" | "recipients") => void;
+  setPayableTab: (value: "bills" | "paid" | "recipients") => void;
   setRecipientAccountName: (value: string) => void;
   setRecipientAccountNo: (value: string) => void;
   setRecipientBankBranch: (value: string) => void;
@@ -4787,6 +4789,11 @@ function CostPayableModule({
   const visibleRecipients = paymentRecipients.filter((recipient) =>
     matchRecipient(recipient, recipientListKeyword),
   );
+  const visiblePayables = payables.filter((payable) =>
+    payableTab === "paid"
+      ? payable.status === "PAID"
+      : payable.status !== "PAID" && payable.status !== "VOIDED",
+  );
   const nextStatus = selectedPayable
     ? nextPayableStatus(selectedPayable.status)
     : "";
@@ -4811,7 +4818,7 @@ function CostPayableModule({
         count={
           payableTab === "recipients"
             ? `${visibleRecipients.length} 个`
-            : `${payables.length} 条`
+            : `${visiblePayables.length} 条`
         }
         title={payableTab === "recipients" ? "收款人列表" : "成本应付列表"}
       >
@@ -4827,6 +4834,13 @@ function CostPayableModule({
             应付账单
           </button>
           <button
+            data-active={payableTab === "paid"}
+            onClick={() => setPayableTab("paid")}
+            type="button"
+          >
+            已付账单
+          </button>
+          <button
             data-active={payableTab === "recipients"}
             onClick={() => setPayableTab("recipients")}
             type="button"
@@ -4834,7 +4848,7 @@ function CostPayableModule({
             收款人
           </button>
         </div>
-        {payableTab === "bills" ? (
+        {payableTab !== "recipients" ? (
           <table>
             <thead>
               <tr>
@@ -4849,7 +4863,7 @@ function CostPayableModule({
               </tr>
             </thead>
             <tbody>
-              {payables.map((payable) => (
+              {visiblePayables.map((payable) => (
                 <tr
                   data-selected={selectedPayableId === payable.id}
                   key={payable.id}
