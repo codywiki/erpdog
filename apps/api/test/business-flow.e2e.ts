@@ -336,6 +336,7 @@ async function main() {
       body: {
         customerId,
         signingEntityId: signingEntity.id,
+        customerContactText: "E2E 对接人 13800000000",
         startDate: "2026-01-01",
         baseFee: "1000.00",
         incentiveUnitPrice: "0.00",
@@ -363,6 +364,7 @@ async function main() {
         body: {
           customerId,
           signingEntityId: signingEntity.id,
+          customerContactText: "E2E 对接人 13800000000",
           startDate: "2026-01-01",
           baseFee: "1000.00",
           incentiveUnitPrice: "0.00",
@@ -402,6 +404,7 @@ async function main() {
             "合同名称",
             "客户编码",
             "签约主体编号",
+            "客户对接人",
             "合同附件ID",
             "状态",
             "开始日期",
@@ -417,6 +420,7 @@ async function main() {
               合同名称: "E2E 服务合同",
               客户编码: customerCode,
               签约主体编号: signingEntity.code,
+              客户对接人: "E2E 对接人 13800000000",
               合同附件ID: contractAttachment.id,
               状态: "ACTIVE",
               开始日期: "2026-01-01",
@@ -439,6 +443,7 @@ async function main() {
     assert(contractId, "Imported contract id missing.");
     const importedContract = await request<{
       code: string;
+      customerContactText?: string;
       signingEntityId?: string | null;
     }>(client, `/contracts/${contractId}`);
     assert(
@@ -448,6 +453,10 @@ async function main() {
     assert(
       importedContract.signingEntityId === signingEntity.id,
       "Imported contract did not link the signing entity.",
+    );
+    assert(
+      importedContract.customerContactText === "E2E 对接人 13800000000",
+      "Imported contract did not keep the customer contact text.",
     );
 
     const receivablePeriodMonth = "2026-05";

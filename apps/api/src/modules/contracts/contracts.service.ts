@@ -43,6 +43,7 @@ const CONTRACT_IMPORT_HEADERS = [
   "合同名称",
   "客户编码",
   "签约主体编号",
+  "客户对接人",
   "合同附件ID",
   "状态",
   "开始日期",
@@ -129,6 +130,7 @@ export class ContractsService {
     );
     const signingEntityId = stringField(body, "signingEntityId");
     await this.ensureSigningEntity(user, signingEntityId);
+    const customerContactText = this.customerContactText(body);
     const chargeItems = arrayField<Payload>(body, "chargeItems");
     const startDate = dateField(body, "startDate");
     const endDate = optionalDate(body, "endDate");
@@ -143,6 +145,7 @@ export class ContractsService {
           code,
           name:
             optionalString(body, "name") ?? `${customer.name} ${code} 服务合同`,
+          customerContactText,
           status: this.statusFromPeriod(startDate, endDate),
           startDate,
           endDate,
@@ -191,6 +194,15 @@ export class ContractsService {
     if (signingEntityId) {
       await this.ensureSigningEntity(user, signingEntityId);
     }
+    const customerContactText = Object.prototype.hasOwnProperty.call(
+      body,
+      "customerContactText",
+    )
+      ? this.customerContactText(body)
+      : before.customerContactText;
+    if (!customerContactText.trim()) {
+      throw new BadRequestException("customerContactText is required.");
+    }
     const startDate = optionalDate(body, "startDate") ?? before.startDate;
     const endDate =
       body.endDate === null
@@ -205,6 +217,7 @@ export class ContractsService {
           signingEntityId,
           code: before.code,
           name: optionalString(body, "name") ?? before.name,
+          customerContactText,
           status: this.statusFromPeriod(startDate, endDate),
           startDate,
           endDate,
@@ -454,6 +467,10 @@ export class ContractsService {
           { 字段: "客户编码", 说明: "必填，必须匹配已存在客户编码。" },
           { 字段: "签约主体编号", 说明: "必填，必须匹配已存在签约主体编号。" },
           {
+            字段: "客户对接人",
+            说明: "必填，自定义文本，例如：张三 13800000000。",
+          },
+          {
             字段: "合同附件ID",
             说明: "必填，先上传 PDF 合同附件后填写附件 ID；多个 ID 用逗号分隔。",
           },
@@ -699,6 +716,14 @@ export class ContractsService {
       ...(tierMode !== undefined ? { tierMode } : {}),
       ...(tierRules !== undefined ? { tierRules } : {}),
     };
+  }
+
+  private customerContactText(body: Payload) {
+    const value = stringField(body, "customerContactText").trim();
+    if (!value) {
+      throw new BadRequestException("customerContactText is required.");
+    }
+    return value;
   }
 
   private optionalMoney(body: Payload, field: string) {
@@ -1020,6 +1045,10 @@ export class ContractsService {
       customerId: customer.id,
       name: this.cell(group.row, ["合同名称", "name", "Name"]),
       signingEntityId: await this.signingEntityIdFromImportRow(user, group.row),
+      customerContactText: this.cell(group.row, [
+        "客户对接人",
+        "customerContactText",
+      ]),
       attachmentIds: this.attachmentIdsFromImportRow(group.row),
       status: this.contractStatusFromCell(
         this.cell(group.row, ["状态", "status"]),

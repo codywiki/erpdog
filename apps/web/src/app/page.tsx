@@ -54,6 +54,7 @@ type Contract = {
   signingEntityId?: string | null;
   code: string;
   name: string;
+  customerContactText?: string;
   status: string;
   startDate: string;
   endDate?: string | null;
@@ -504,6 +505,9 @@ function translateErrorMessage(message: string) {
   }
   if (/Contract attachment is required/i.test(message)) {
     return "新建合同必须上传合同附件。";
+  }
+  if (/customerContactText is required/i.test(message)) {
+    return "客户对接人不能为空。";
   }
   if (/Payment recipient not found/i.test(message)) {
     return "请选择有效收款人。";
@@ -1036,6 +1040,7 @@ export default function Home() {
     `${periodMonth}-01`,
   );
   const [contractEndDate, setContractEndDate] = useState("");
+  const [contractCustomerContact, setContractCustomerContact] = useState("");
   const [contractIncentiveUnitPrice, setContractIncentiveUnitPrice] =
     useState("0.00");
   const [contractServiceFeeRate, setContractServiceFeeRate] = useState("0");
@@ -1743,6 +1748,7 @@ export default function Home() {
     setContractFee("10000.00");
     setContractStartDate(nextStartDate);
     setContractEndDate("");
+    setContractCustomerContact("");
     setContractIncentiveUnitPrice("0.00");
     setContractServiceFeeRate("0");
     setContractTierMode("NONE");
@@ -1792,6 +1798,7 @@ export default function Home() {
     setContractEndDate(
       dateText(contract.endDate) === "-" ? "" : dateText(contract.endDate),
     );
+    setContractCustomerContact(contract.customerContactText ?? "");
     setContractIncentiveUnitPrice(contract.incentiveUnitPrice ?? "0.00");
     setContractServiceFeeRate(contract.serviceFeeRate ?? "0");
     setContractTierMode(contract.tierMode ?? "NONE");
@@ -2361,6 +2368,10 @@ export default function Home() {
       setMessage("保存合同失败：合同周期开始日期不能为空。");
       return;
     }
+    if (!contractCustomerContact.trim()) {
+      setMessage("保存合同失败：客户对接人不能为空。");
+      return;
+    }
     if (
       contractEndDate &&
       new Date(contractEndDate).getTime() <
@@ -2411,6 +2422,7 @@ export default function Home() {
             body: JSON.stringify({
               customerId: selectedCustomerId,
               signingEntityId: selectedSigningEntityId,
+              customerContactText: contractCustomerContact,
               startDate: contractStartDate,
               endDate: contractEndDate || null,
               baseFee: contractFee,
@@ -3307,6 +3319,7 @@ export default function Home() {
             contractDetailOpen={contractDetailOpen}
             contractDialogOpen={contractDialogOpen}
             contractEndDate={contractEndDate}
+            contractCustomerContact={contractCustomerContact}
             contractFee={contractFee}
             contractFiles={contractFiles}
             contractIncentiveUnitPrice={contractIncentiveUnitPrice}
@@ -3330,6 +3343,7 @@ export default function Home() {
             selectedContract={selectedContract}
             selectedContractId={selectedContractId}
             setContractEndDate={setContractEndDate}
+            setContractCustomerContact={setContractCustomerContact}
             setContractFee={setContractFee}
             setContractIncentiveUnitPrice={setContractIncentiveUnitPrice}
             setContractServiceFeeRate={setContractServiceFeeRate}
@@ -5301,6 +5315,7 @@ function ContractsModule({
   contractDetailOpen,
   contractDialogOpen,
   contractEndDate,
+  contractCustomerContact,
   contractFee,
   contractFiles,
   contractIncentiveUnitPrice,
@@ -5322,6 +5337,7 @@ function ContractsModule({
   selectedContract,
   selectedContractId,
   setContractEndDate,
+  setContractCustomerContact,
   setContractFee,
   setContractIncentiveUnitPrice,
   setContractServiceFeeRate,
@@ -5342,6 +5358,7 @@ function ContractsModule({
   contractDetailOpen: boolean;
   contractDialogOpen: boolean;
   contractEndDate: string;
+  contractCustomerContact: string;
   contractFee: string;
   contractFiles: File[];
   contractIncentiveUnitPrice: string;
@@ -5363,6 +5380,7 @@ function ContractsModule({
   selectedContract?: Contract;
   selectedContractId: string;
   setContractEndDate: (value: string) => void;
+  setContractCustomerContact: (value: string) => void;
   setContractFee: (value: string) => void;
   setContractIncentiveUnitPrice: (value: string) => void;
   setContractServiceFeeRate: (value: string) => void;
@@ -5539,6 +5557,16 @@ function ContractsModule({
                   </select>
                 </label>
                 <label>
+                  客户对接人
+                  <input
+                    onChange={(event) =>
+                      setContractCustomerContact(event.target.value)
+                    }
+                    placeholder="例如 张三 13800000000"
+                    value={contractCustomerContact}
+                  />
+                </label>
+                <label>
                   周期开始
                   <input
                     onChange={(event) =>
@@ -5684,6 +5712,10 @@ function ContractsModule({
                 <strong>
                   {selectedContract.signingEntity?.shortName ?? "-"}
                 </strong>
+              </div>
+              <div>
+                <span>客户对接人</span>
+                <strong>{selectedContract.customerContactText || "-"}</strong>
               </div>
               <div>
                 <span>合同周期</span>

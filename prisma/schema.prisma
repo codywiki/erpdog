@@ -411,25 +411,26 @@ model SigningEntity {
 }
 
 model Contract {
-  id                 String         @id @default(uuid())
-  orgId              String         @map("org_id")
-  customerId         String         @map("customer_id")
-  signingEntityId    String?        @map("signing_entity_id")
-  code               String
-  name               String
-  status             ContractStatus @default(DRAFT)
-  startDate          DateTime       @map("start_date")
-  endDate            DateTime?      @map("end_date")
-  billingDay         Int            @default(1) @map("billing_day")
-  currency           String         @default("CNY")
-  notes              String?
-  baseFee            Decimal?       @map("base_fee") @db.Decimal(18, 2)
-  incentiveUnitPrice Decimal?       @map("incentive_unit_price") @db.Decimal(18, 2)
-  serviceFeeRate     Decimal?       @map("service_fee_rate") @db.Decimal(8, 4)
-  tierMode           String?        @map("tier_mode")
-  tierRules          Json?          @map("tier_rules")
-  createdAt          DateTime       @default(now()) @map("created_at")
-  updatedAt          DateTime       @updatedAt @map("updated_at")
+  id                  String         @id @default(uuid())
+  orgId               String         @map("org_id")
+  customerId          String         @map("customer_id")
+  signingEntityId     String?        @map("signing_entity_id")
+  code                String
+  name                String
+  customerContactText String         @default("") @map("customer_contact_text")
+  status              ContractStatus @default(DRAFT)
+  startDate           DateTime       @map("start_date")
+  endDate             DateTime?      @map("end_date")
+  billingDay          Int            @default(1) @map("billing_day")
+  currency            String         @default("CNY")
+  notes               String?
+  baseFee             Decimal?       @map("base_fee") @db.Decimal(18, 2)
+  incentiveUnitPrice  Decimal?       @map("incentive_unit_price") @db.Decimal(18, 2)
+  serviceFeeRate      Decimal?       @map("service_fee_rate") @db.Decimal(8, 4)
+  tierMode            String?        @map("tier_mode")
+  tierRules           Json?          @map("tier_rules")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
 
   org           Organization         @relation(fields: [orgId], references: [id], onDelete: Restrict)
   customer      Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
