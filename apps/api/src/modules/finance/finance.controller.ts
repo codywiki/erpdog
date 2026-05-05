@@ -286,26 +286,6 @@ export class FinanceController {
     return this.finance.reversePayment(user, id, body);
   }
 
-  @Post("periods/:month/close")
-  @RequirePermissions(PERMISSION_CODES.PERIOD_CLOSE)
-  closePeriod(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param("month") month: string,
-    @Body() body: Payload,
-  ) {
-    return this.finance.closePeriod(user, month, body);
-  }
-
-  @Post("periods/:month/reopen")
-  @RequirePermissions(PERMISSION_CODES.PERIOD_REOPEN)
-  reopenPeriod(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param("month") month: string,
-    @Body() body: Payload,
-  ) {
-    return this.finance.reopenPeriod(user, month, body);
-  }
-
   @Get("attachments")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_ALL,

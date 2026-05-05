@@ -376,33 +376,15 @@ async function main() {
       id: string;
       status: string;
       totalAmount: string;
-      settlements: Array<{
-        items: Array<{
-          cooperationFee: string;
-          serviceFee: string;
-          totalFee: string;
-        }>;
-      }>;
+      contract?: { signingEntity?: { id: string; shortName: string } | null };
     }>(client, "/bills", {
       method: "POST",
       body: {
         customerId,
         contractId,
         periodMonth: receivablePeriodMonth,
-        settlements: [
-          {
-            title: "E2E 子结算",
-            details: [
-              {
-                customerContactName: "E2E 客户对接人",
-                projectName: "E2E 项目",
-                periodMonth: receivablePeriodMonth,
-                cooperationModes: ["一口价投放", "CPA"],
-                cooperationFee: "1000.00",
-              },
-            ],
-          },
-        ],
+        billKind: "RECEIVABLE",
+        totalAmount: "1000.00",
       },
     });
     assert(
@@ -410,8 +392,12 @@ async function main() {
       "Receivable bill should start pending approval.",
     );
     assert(
-      receivableBill.settlements[0]?.items[0]?.totalFee === "1000.00",
-      "Receivable settlement total was not calculated.",
+      receivableBill.totalAmount === "1000.00",
+      "Flat receivable bill amount was not saved.",
+    );
+    assert(
+      receivableBill.contract?.signingEntity?.id === signingEntity.id,
+      "Receivable bill did not include the signing entity.",
     );
     await expectStatus(client, `/bills/${receivableBill.id}/approve`, 400, {
       method: "POST",
@@ -452,15 +438,10 @@ async function main() {
         },
       },
     );
-    await request(client, `/bills/${receivableBill.id}/evidence`, {
-      method: "POST",
-      body: { attachmentIds: [evidenceAttachment.id] },
-    });
-
     const approvedReceivable = await request<{ status: string }>(
       client,
       `/bills/${receivableBill.id}/approve`,
-      { method: "POST" },
+      { method: "POST", body: { attachmentIds: [evidenceAttachment.id] } },
     );
     assert(
       approvedReceivable.status === "PENDING_SETTLEMENT",
@@ -629,15 +610,69 @@ async function main() {
       },
     });
     const paidPayables = await request<{
-      items: Array<{ id: string; status: string }>;
+      items: Array<{
+        id: string;
+        status: string;
+        paymentAllocations?: Array<{
+          payment?: { attachmentId?: string | null } | null;
+        }>;
+      }>;
     }>(client, "/payables?status=PAID&pageSize=20");
+    const paidPayable = paidPayables.items.find(
+      (payable) => payable.id === linkedPayable.id,
+    );
     assert(
-      paidPayables.items.some(
-        (payable) =>
-          payable.id === linkedPayable.id && payable.status === "PAID",
-      ),
+      paidPayable?.status === "PAID",
       "Linked payable was not marked paid.",
     );
+    assert(
+      paidPayable.paymentAllocations?.some(
+        (allocation) =>
+          allocation.payment?.attachmentId === payableAttachment.id,
+      ),
+      "Paid payable did not include its payment attachment.",
+    );
+    const receivableProfitRows = await request<
+      Array<{
+        customerId: string;
+        incomeAmount: string;
+        costAmount: string;
+        profitAmount: string;
+        grossMargin: string | null;
+      }>
+    >(client, `/reports/customer-profit?periodMonth=${receivablePeriodMonth}`);
+    const receivableProfit = receivableProfitRows.find(
+      (row) => row.customerId === customerId,
+    );
+    assert(
+      receivableProfit?.incomeAmount === "1000.00" &&
+        receivableProfit.costAmount === "250.00" &&
+        receivableProfit.profitAmount === "750.00" &&
+        receivableProfit.grossMargin === "75",
+      "Receivable profit was not calculated from paid linked payable.",
+    );
+    const verificationPrisma = new PrismaClient();
+    try {
+      const receivableBillRecord = await verificationPrisma.bill.findUnique({
+        where: { id: receivableBill.id },
+        select: { orgId: true },
+      });
+      assert(receivableBillRecord, "Receivable bill record missing.");
+      const closedPeriod = await verificationPrisma.billingPeriod.findUnique({
+        where: {
+          orgId_periodMonth: {
+            orgId: receivableBillRecord.orgId,
+            periodMonth: receivablePeriodMonth,
+          },
+        },
+      });
+      assert(
+        closedPeriod?.status === "CLOSED",
+        "Receivable period was not auto-closed.",
+      );
+    } finally {
+      await verificationPrisma.$disconnect();
+    }
 
     const businessPeriodMonth = "2026-03";
     const businessBill = await request<{

@@ -29,7 +29,14 @@ type ContractAttachment = {
   id: string;
   fileName: string;
   contentType?: string | null;
+  sizeBytes?: string | null;
+  url?: string | null;
   createdAt?: string;
+};
+
+type Attachment = ContractAttachment & {
+  ownerType?: string | null;
+  ownerId?: string | null;
 };
 
 type ContractTierRule = {
@@ -88,7 +95,7 @@ type Bill = {
   invoiceAttachmentIds?: string[];
   receiptAttachmentIds?: string[];
   customer?: Customer;
-  contract?: Pick<Contract, "id" | "code" | "name">;
+  contract?: Pick<Contract, "id" | "code" | "name" | "signingEntity">;
   items?: Array<{
     id?: string;
     name: string;
@@ -125,22 +132,6 @@ type BillSettlementItem = {
   totalFee: string;
 };
 
-type ReceivableDetailInput = {
-  id: string;
-  customerContactName: string;
-  projectName: string;
-  periodMonth: string;
-  cooperationModes: string[];
-  otherModeNote: string;
-  cooperationFee: string;
-};
-
-type ReceivableSettlementInput = {
-  id: string;
-  title: string;
-  details: ReceivableDetailInput[];
-};
-
 type Invoice = {
   id: string;
   invoiceNo: string;
@@ -173,6 +164,16 @@ type Payable = {
   status: string;
   customer?: Customer | null;
   bill?: Pick<Bill, "id" | "billNo" | "periodMonth" | "status"> | null;
+  paymentAllocations?: Array<{
+    id?: string;
+    amount?: string;
+    payment?: {
+      id: string;
+      attachmentId?: string | null;
+      paidAt?: string;
+      status?: string;
+    } | null;
+  }>;
 };
 
 type PaymentRequest = {
@@ -448,17 +449,43 @@ function translateErrorMessage(message: string) {
 
 const modules = [
   { id: "dashboard", label: "经营总览", title: "经营驾驶舱" },
-  { id: "activation", label: "正式启用", title: "正式启用路径" },
-  { id: "identity", label: "用户权限", title: "用户、角色与审计" },
   { id: "customers", label: "客户", title: "客户管理" },
-  { id: "signingEntities", label: "签约主体", title: "签约主体管理" },
   { id: "contracts", label: "合同", title: "合同管理" },
+  { id: "signingEntities", label: "签约主体", title: "签约主体管理" },
   { id: "receivableBilling", label: "账单应收", title: "账单应收" },
   { id: "costPayable", label: "成本应付", title: "成本应付" },
   { id: "closing", label: "结账报表", title: "结账与报表" },
+  { id: "identity", label: "用户权限", title: "用户、角色与审计" },
+  { id: "activation", label: "正式启用", title: "正式启用路径" },
 ] as const;
 
 type ModuleId = (typeof modules)[number]["id"];
+
+const navItems: Array<
+  | { kind: "module"; id: ModuleId }
+  | { kind: "group"; label: string; children: [ModuleId, ...ModuleId[]] }
+> = [
+  { kind: "module", id: "dashboard" },
+  { kind: "module", id: "customers" },
+  { kind: "module", id: "contracts" },
+  { kind: "module", id: "signingEntities" },
+  { kind: "module", id: "receivableBilling" },
+  { kind: "module", id: "costPayable" },
+  { kind: "module", id: "closing" },
+  {
+    kind: "group",
+    label: "租户设置",
+    children: ["identity", "activation"],
+  },
+];
+
+function getModuleMeta(id: ModuleId) {
+  const module = modules.find((item) => item.id === id);
+  if (!module) {
+    throw new Error(`Unknown module: ${id}`);
+  }
+  return module;
+}
 
 const billStatusText: Record<string, string> = {
   DRAFT: "草稿",
@@ -476,9 +503,9 @@ const billStatusText: Record<string, string> = {
 };
 
 const payableStatusText: Record<string, string> = {
-  UNPAID: "待付款",
-  PARTIALLY_PAID: "部分付款",
-  PAID: "已付款",
+  UNPAID: "待支付",
+  PARTIALLY_PAID: "待支付",
+  PAID: "已支付",
   VOIDED: "已作废",
 };
 
@@ -487,8 +514,6 @@ const ownerDelegatedRoleCodes = [
   "customer_manager",
   "finance",
 ];
-
-const cooperationModes = ["一口价投放", "代结算", "CPA", "CPS", "其他"];
 
 const taxpayerTypeText: Record<TaxpayerType, string> = {
   SMALL_SCALE: "小规模纳税人",
@@ -540,6 +565,91 @@ function dateText(value: string | undefined | null) {
 
 function billStatus(value: string) {
   return billStatusText[value] ?? value;
+}
+
+function nextReceivableStatus(status: string) {
+  if (status === "PENDING_APPROVAL") {
+    return "PENDING_SETTLEMENT";
+  }
+  if (status === "PENDING_SETTLEMENT") {
+    return "INVOICED";
+  }
+  if (status === "INVOICED") {
+    return "RECEIVED";
+  }
+  return "";
+}
+
+function billSigningEntityName(bill: Bill) {
+  return (
+    bill.contract?.signingEntity?.shortName ??
+    bill.contract?.signingEntity?.fullName ??
+    "-"
+  );
+}
+
+function billAttachmentIds(bill: Bill) {
+  return Array.from(
+    new Set([
+      ...(bill.evidenceAttachmentIds ?? []),
+      ...(bill.invoiceAttachmentIds ?? []),
+      ...(bill.receiptAttachmentIds ?? []),
+    ]),
+  );
+}
+
+function nextPayableStatus(status: string) {
+  if (status === "UNPAID" || status === "PARTIALLY_PAID") {
+    return "PAID";
+  }
+  return "";
+}
+
+function payableAttachmentStatusLabel(
+  attachment: Attachment,
+  payable?: Payable,
+) {
+  if (
+    payable?.status === "PAID" ||
+    payable?.paymentAllocations?.some(
+      (allocation) => allocation.payment?.attachmentId === attachment.id,
+    )
+  ) {
+    return "已支付";
+  }
+  return "未标记";
+}
+
+function attachmentStatusLabel(attachment: Attachment, bill?: Bill) {
+  if (bill?.receiptAttachmentIds?.includes(attachment.id)) {
+    return "已到账";
+  }
+  if (bill?.invoiceAttachmentIds?.includes(attachment.id)) {
+    return "已开票";
+  }
+  if (bill?.evidenceAttachmentIds?.includes(attachment.id)) {
+    return "待结算";
+  }
+  return "未标记";
+}
+
+function dateTimeText(value: string | undefined | null) {
+  if (!value) {
+    return "-";
+  }
+
+  return new Date(value).toLocaleString("zh-CN", {
+    hour12: false,
+  });
+}
+
+function isPreviewableAttachment(attachment: Attachment) {
+  const contentType = attachment.contentType ?? "";
+  return (
+    contentType.includes("pdf") ||
+    contentType.startsWith("image/") ||
+    /\.(pdf|png|jpe?g)$/i.test(attachment.fileName)
+  );
 }
 
 const contractAttachmentMaxBytes = 20 * 1024 * 1024;
@@ -724,19 +834,29 @@ export default function Home() {
     "open",
   );
   const [payableTab, setPayableTab] = useState<"open" | "paid">("open");
-  const [receivableSettlements, setReceivableSettlements] = useState<
-    ReceivableSettlementInput[]
-  >([]);
-  const [receivableFiles, setReceivableFiles] = useState<File[]>([]);
-  const [billInvoiceFiles, setBillInvoiceFiles] = useState<File[]>([]);
-  const [billReceiptFiles, setBillReceiptFiles] = useState<File[]>([]);
+  const [receivableAmount, setReceivableAmount] = useState("0.00");
+  const [billStatusDialogOpen, setBillStatusDialogOpen] = useState(false);
+  const [billStatusTarget, setBillStatusTarget] = useState("");
+  const [billStatusFiles, setBillStatusFiles] = useState<File[]>([]);
+  const [billAttachmentsDialogOpen, setBillAttachmentsDialogOpen] =
+    useState(false);
+  const [billAttachments, setBillAttachments] = useState<Attachment[]>([]);
+  const [attachmentPreview, setAttachmentPreview] = useState<{
+    attachment: Attachment;
+    url: string;
+  } | null>(null);
   const [payableDialogOpen, setPayableDialogOpen] = useState(false);
   const [selectedPayableId, setSelectedPayableId] = useState("");
   const [payableVendorName, setPayableVendorName] = useState("");
   const [payableAmount, setPayableAmount] = useState("0.00");
   const [payableRemarks, setPayableRemarks] = useState("");
-  const [payablePaymentFile, setPayablePaymentFile] = useState<File | null>(
-    null,
+  const [payableStatusDialogOpen, setPayableStatusDialogOpen] = useState(false);
+  const [payableStatusTarget, setPayableStatusTarget] = useState("");
+  const [payableStatusFiles, setPayableStatusFiles] = useState<File[]>([]);
+  const [payableAttachmentsDialogOpen, setPayableAttachmentsDialogOpen] =
+    useState(false);
+  const [payableAttachments, setPayableAttachments] = useState<Attachment[]>(
+    [],
   );
   const [payablePaymentAccount, setPayablePaymentAccount] =
     useState("默认付款账户");
@@ -766,7 +886,7 @@ export default function Home() {
     (contract) => contract.id === editingContractId,
   );
   const editingConsoleUser = users.find((item) => item.id === editingUserId);
-  const activeModule = modules.find((module) => module.id === active)!;
+  const activeModule = getModuleMeta(active);
   const isLoggedIn = Boolean(token && user);
   const hasPermission = (...permissions: string[]) =>
     permissions.length === 0 ||
@@ -1470,25 +1590,6 @@ export default function Home() {
     return attachmentIds;
   }
 
-  function updateBusinessFile(
-    fileList: FileList | null,
-    setter: (file: File | null) => void,
-    label: string,
-  ) {
-    const file = fileList?.[0] ?? null;
-    if (!file) {
-      setter(null);
-      return;
-    }
-    if (!isBusinessAttachmentValid(file)) {
-      setter(null);
-      setMessage(`${label}不符合要求：仅支持 PDF、PNG、JPG，且小于 20MB。`);
-      return;
-    }
-
-    setter(file);
-  }
-
   function updateBusinessFiles(
     fileList: FileList | null,
     setter: (files: File[]) => void,
@@ -1733,26 +1834,6 @@ export default function Home() {
     setBillDialogOpen(false);
   }
 
-  function newReceivableDetail(): ReceivableDetailInput {
-    return {
-      id: crypto.randomUUID(),
-      customerContactName: "",
-      projectName: "",
-      periodMonth,
-      cooperationModes: ["一口价投放"],
-      otherModeNote: "",
-      cooperationFee: "0.00",
-    };
-  }
-
-  function newReceivableSettlement(index: number): ReceivableSettlementInput {
-    return {
-      id: crypto.randomUUID(),
-      title: `子结算 ${index + 1}`,
-      details: [newReceivableDetail()],
-    };
-  }
-
   function resetReceivableForm() {
     const preferredCustomerId = selectedCustomerId || customers[0]?.id || "";
     const matchingContract = contracts.find(
@@ -1774,10 +1855,8 @@ export default function Home() {
       preferredCustomerId;
     setSelectedCustomerId(nextCustomerId);
     setSelectedContractId(nextContract?.id ?? "");
-    setReceivableSettlements([newReceivableSettlement(0)]);
-    setReceivableFiles([]);
-    setBillInvoiceFiles([]);
-    setBillReceiptFiles([]);
+    setReceivableAmount("0.00");
+    setBillStatusFiles([]);
   }
 
   function openCreateReceivableDialog() {
@@ -1799,79 +1878,6 @@ export default function Home() {
     setBillDialogOpen(true);
   }
 
-  function updateReceivableSettlement(
-    settlementId: string,
-    updater: (
-      settlement: ReceivableSettlementInput,
-    ) => ReceivableSettlementInput,
-  ) {
-    setReceivableSettlements((current) =>
-      current.map((settlement) =>
-        settlement.id === settlementId ? updater(settlement) : settlement,
-      ),
-    );
-  }
-
-  function updateReceivableDetail(
-    settlementId: string,
-    detailId: string,
-    patch: Partial<ReceivableDetailInput>,
-  ) {
-    updateReceivableSettlement(settlementId, (settlement) => ({
-      ...settlement,
-      details: settlement.details.map((detail) =>
-        detail.id === detailId ? { ...detail, ...patch } : detail,
-      ),
-    }));
-  }
-
-  function toggleReceivableMode(
-    settlementId: string,
-    detail: ReceivableDetailInput,
-    mode: string,
-  ) {
-    const exists = detail.cooperationModes.includes(mode);
-    const nextModes = exists
-      ? detail.cooperationModes.filter((item) => item !== mode)
-      : [...detail.cooperationModes, mode];
-    updateReceivableDetail(settlementId, detail.id, {
-      cooperationModes: nextModes,
-      otherModeNote: nextModes.includes("其他") ? detail.otherModeNote : "",
-    });
-  }
-
-  function addReceivableSettlement() {
-    setReceivableSettlements((current) => [
-      ...current,
-      newReceivableSettlement(current.length),
-    ]);
-  }
-
-  function removeReceivableSettlement(settlementId: string) {
-    setReceivableSettlements((current) =>
-      current.length <= 1
-        ? current
-        : current.filter((settlement) => settlement.id !== settlementId),
-    );
-  }
-
-  function addReceivableDetail(settlementId: string) {
-    updateReceivableSettlement(settlementId, (settlement) => ({
-      ...settlement,
-      details: [...settlement.details, newReceivableDetail()],
-    }));
-  }
-
-  function removeReceivableDetail(settlementId: string, detailId: string) {
-    updateReceivableSettlement(settlementId, (settlement) => ({
-      ...settlement,
-      details:
-        settlement.details.length <= 1
-          ? settlement.details
-          : settlement.details.filter((detail) => detail.id !== detailId),
-    }));
-  }
-
   function createReceivableBill(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const contract = selectedContract;
@@ -1883,32 +1889,13 @@ export default function Home() {
       setMessage("新增账单应收失败：请选择合同。");
       return;
     }
-    const invalidDetail = receivableSettlements
-      .flatMap((settlement) => settlement.details)
-      .find(
-        (detail) =>
-          !detail.customerContactName.trim() ||
-          !detail.projectName.trim() ||
-          !detail.periodMonth.trim() ||
-          detail.cooperationModes.length === 0 ||
-          !Number.isFinite(Number(detail.cooperationFee)) ||
-          Number(detail.cooperationFee) <= 0 ||
-          (detail.cooperationModes.includes("其他") &&
-            !detail.otherModeNote.trim()),
-      );
-    if (invalidDetail) {
-      setMessage(
-        "新增账单应收失败：请完整填写结算明细，合作费用必须大于 0，选择其他时需填写备注。",
-      );
+    if (
+      !Number.isFinite(Number(receivableAmount)) ||
+      Number(receivableAmount) <= 0
+    ) {
+      setMessage("新增账单应收失败：金额必须大于 0。");
       return;
     }
-    if (receivableFiles.length === 0) {
-      setMessage(
-        "新增账单应收失败：请上传结算单、邮件确认截图或微信确认截图。",
-      );
-      return;
-    }
-
     void submitAction("新增账单应收", ["bill.manage"], async () => {
       const result = await request<Bill>("/bills", {
         method: "POST",
@@ -1916,97 +1903,136 @@ export default function Home() {
           customerId: selectedCustomerId,
           contractId: contract.id,
           periodMonth,
-          settlements: receivableSettlements.map((settlement) => ({
-            title: settlement.title,
-            details: settlement.details.map((detail) => ({
-              customerContactName: detail.customerContactName,
-              projectName: detail.projectName,
-              periodMonth: detail.periodMonth,
-              cooperationModes: detail.cooperationModes,
-              otherModeNote: detail.otherModeNote,
-              cooperationFee: detail.cooperationFee,
-            })),
-          })),
+          billKind: "RECEIVABLE",
+          totalAmount: receivableAmount,
         }),
       });
-      if (receivableFiles.length > 0) {
-        const attachmentIds = await uploadAttachments(
-          "bill",
-          result.id,
-          receivableFiles,
-        );
-        await request(`/bills/${result.id}/evidence`, {
+      setSelectedBillId(result.id);
+      setBillDialogOpen(false);
+      setReceivableAmount("0.00");
+      return result;
+    });
+  }
+
+  function openBillStatusDialog(bill: Bill) {
+    const nextStatus = nextReceivableStatus(bill.status);
+    if (!nextStatus) {
+      setMessage("修改账单状态失败：当前状态没有可继续流转的下一步。");
+      return;
+    }
+    setSelectedBillId(bill.id);
+    setBillStatusTarget(nextStatus);
+    setBillStatusFiles([]);
+    setReceiptAccount("默认收款账户");
+    setBillStatusDialogOpen(true);
+  }
+
+  function closeBillStatusDialog() {
+    setBillStatusDialogOpen(false);
+    setBillStatusTarget("");
+    setBillStatusFiles([]);
+  }
+
+  function saveBillStatus(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedBill) {
+      setMessage("修改账单状态失败：请先选择一张应收账单。");
+      return;
+    }
+    const expectedStatus = nextReceivableStatus(selectedBill.status);
+    if (!expectedStatus || billStatusTarget !== expectedStatus) {
+      setMessage("修改账单状态失败：状态必须按顺序逐级修改。");
+      return;
+    }
+    if (billStatusFiles.length === 0) {
+      setMessage("修改账单状态失败：请上传本次状态变更对应的附件。");
+      return;
+    }
+
+    const label = `修改为${billStatus(billStatusTarget)}`;
+    const permissions =
+      billStatusTarget === "PENDING_SETTLEMENT"
+        ? ["bill.approve"]
+        : ["receivable.settle"];
+    void submitAction(label, permissions, async () => {
+      const attachmentIds = await uploadAttachments(
+        "bill",
+        selectedBill.id,
+        billStatusFiles,
+      );
+      let result: unknown;
+      if (billStatusTarget === "PENDING_SETTLEMENT") {
+        result = await request(`/bills/${selectedBill.id}/approve`, {
           method: "POST",
           body: JSON.stringify({ attachmentIds }),
         });
+      } else if (billStatusTarget === "INVOICED") {
+        result = await request(`/bills/${selectedBill.id}/mark-invoiced`, {
+          method: "POST",
+          body: JSON.stringify({ invoiceAttachmentIds: attachmentIds }),
+        });
+      } else {
+        result = await request(`/bills/${selectedBill.id}/mark-received`, {
+          method: "POST",
+          body: JSON.stringify({
+            receiptAttachmentIds: attachmentIds,
+            account: receiptAccount,
+            payer:
+              selectedBill.customer?.fullName ?? selectedBill.customer?.name,
+          }),
+        });
       }
-      setSelectedBillId(result.id);
-      setBillDialogOpen(false);
-      setReceivableFiles([]);
+      closeBillStatusDialog();
       return result;
     });
   }
 
-  function approveSelectedReceivable() {
-    if (!selectedBill) {
-      setMessage("审批账单失败：请先选择一张应收账单。");
-      return;
-    }
-    void submitAction("审批账单应收", ["bill.approve"], () =>
-      request(`/bills/${selectedBill.id}/approve`, { method: "POST" }),
-    );
-  }
-
-  function markSelectedBillInvoiced() {
-    if (!selectedBill) {
-      setMessage("修改为已开票失败：请先选择一张应收账单。");
-      return;
-    }
-    if (billInvoiceFiles.length === 0) {
-      setMessage("修改为已开票失败：必须上传发票源文件。");
-      return;
-    }
-    void submitAction("修改为已开票", ["receivable.settle"], async () => {
-      const invoiceAttachmentIds = await uploadAttachments(
-        "bill",
-        selectedBill.id,
-        billInvoiceFiles,
+  async function loadBillAttachments(bill: Bill) {
+    try {
+      const page = await request<PaginatedResponse<Attachment>>(
+        `/attachments?ownerType=bill&ownerId=${encodeURIComponent(bill.id)}&pageSize=100`,
       );
-      const result = await request(`/bills/${selectedBill.id}/mark-invoiced`, {
-        method: "POST",
-        body: JSON.stringify({ invoiceAttachmentIds }),
-      });
-      setBillInvoiceFiles([]);
-      return result;
-    });
+      setBillAttachments(listItems(page));
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `加载附件失败：${translateErrorMessage(error.message)}`
+          : "加载附件失败",
+      );
+    }
   }
 
-  function markSelectedBillReceived() {
-    if (!selectedBill) {
-      setMessage("修改为已到账失败：请先选择一张应收账单。");
-      return;
-    }
-    if (billReceiptFiles.length === 0) {
-      setMessage("修改为已到账失败：必须上传银行打款回单截图。");
-      return;
-    }
-    void submitAction("修改为已到账", ["receivable.settle"], async () => {
-      const receiptAttachmentIds = await uploadAttachments(
-        "bill",
-        selectedBill.id,
-        billReceiptFiles,
-      );
-      const result = await request(`/bills/${selectedBill.id}/mark-received`, {
-        method: "POST",
-        body: JSON.stringify({
-          receiptAttachmentIds,
-          account: receiptAccount,
-          payer: selectedBill.customer?.fullName ?? selectedBill.customer?.name,
-        }),
+  function openBillAttachmentsDialog(bill: Bill) {
+    setSelectedBillId(bill.id);
+    setAttachmentPreview(null);
+    setBillAttachments([]);
+    setBillAttachmentsDialogOpen(true);
+    void loadBillAttachments(bill);
+  }
+
+  function closeBillAttachmentsDialog() {
+    setBillAttachmentsDialogOpen(false);
+    setBillAttachments([]);
+    setAttachmentPreview(null);
+  }
+
+  async function openAttachmentPreview(attachment: Attachment) {
+    try {
+      const result = await request<{
+        attachment: Attachment;
+        download: { url: string };
+      }>(`/attachments/${attachment.id}/download-url`);
+      setAttachmentPreview({
+        attachment: result.attachment,
+        url: result.download.url,
       });
-      setBillReceiptFiles([]);
-      return result;
-    });
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `打开附件失败：${translateErrorMessage(error.message)}`
+          : "打开附件失败",
+      );
+    }
   }
 
   function openCreatePayableDialog() {
@@ -2038,7 +2064,7 @@ export default function Home() {
       return;
     }
     if (!payableVendorName.trim()) {
-      setMessage("新增成本应付失败：请填写供应商或收款方。");
+      setMessage("新增成本应付失败：请填写收款方。");
       return;
     }
     if (!Number.isFinite(Number(payableAmount)) || Number(payableAmount) <= 0) {
@@ -2062,29 +2088,58 @@ export default function Home() {
     });
   }
 
-  function markSelectedPayablePaid() {
-    if (!selectedPayable) {
-      setMessage("登记应付付款失败：请先选择一条成本应付。");
+  function openPayableStatusDialog(payable: Payable) {
+    const nextStatus = nextPayableStatus(payable.status);
+    if (!nextStatus) {
+      setMessage("修改应付状态失败：当前状态没有可继续流转的下一步。");
       return;
     }
-    if (!payablePaymentFile) {
-      setMessage("登记应付付款失败：请上传付款回单。");
+    setSelectedPayableId(payable.id);
+    setPayableStatusTarget(nextStatus);
+    setPayableStatusFiles([]);
+    setPayablePaymentAccount("默认付款账户");
+    setPayableStatusDialogOpen(true);
+  }
+
+  function closePayableStatusDialog() {
+    setPayableStatusDialogOpen(false);
+    setPayableStatusTarget("");
+    setPayableStatusFiles([]);
+  }
+
+  function savePayableStatus(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedPayable) {
+      setMessage("修改应付状态失败：请先选择一条成本应付。");
+      return;
+    }
+    const expectedStatus = nextPayableStatus(selectedPayable.status);
+    if (!expectedStatus || payableStatusTarget !== expectedStatus) {
+      setMessage("修改应付状态失败：状态必须按顺序逐级修改。");
+      return;
+    }
+    if (payableStatusFiles.length === 0) {
+      setMessage("修改应付状态失败：请上传本次状态变更对应的附件。");
       return;
     }
     const unpaidAmount =
       Number(selectedPayable.amount ?? 0) -
       Number(selectedPayable.paidAmount ?? 0);
     if (unpaidAmount <= 0) {
-      setMessage("登记应付付款失败：该应付已付款。");
+      setMessage("修改应付状态失败：该应付已支付。");
       return;
     }
 
-    void submitAction("登记应付付款", ["payable.settle"], async () => {
-      const attachmentId = await uploadAttachment(
+    void submitAction("修改为已支付", ["payable.settle"], async () => {
+      const attachmentIds = await uploadAttachments(
         "payable",
         selectedPayable.id,
-        payablePaymentFile,
+        payableStatusFiles,
       );
+      const primaryAttachmentId = attachmentIds[0];
+      if (!primaryAttachmentId) {
+        throw new Error("请上传本次状态变更对应的附件。");
+      }
       const result = await request("/payments", {
         method: "POST",
         body: JSON.stringify({
@@ -2092,7 +2147,7 @@ export default function Home() {
           amount: amountInput(unpaidAmount),
           account: payablePaymentAccount,
           payeeName: selectedPayable.vendorName,
-          attachmentId,
+          attachmentId: primaryAttachmentId,
           allocations: [
             {
               payableId: selectedPayable.id,
@@ -2101,19 +2156,38 @@ export default function Home() {
           ],
         }),
       });
-      setPayablePaymentFile(null);
+      closePayableStatusDialog();
       return result;
     });
   }
 
-  function closePeriod(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void submitAction("关闭账期", ["period.close"], () =>
-      request(`/periods/${periodMonth}/close`, {
-        method: "POST",
-        body: JSON.stringify({ reason: "月度结账" }),
-      }),
-    );
+  async function loadPayableAttachments(payable: Payable) {
+    try {
+      const page = await request<PaginatedResponse<Attachment>>(
+        `/attachments?ownerType=payable&ownerId=${encodeURIComponent(payable.id)}&pageSize=100`,
+      );
+      setPayableAttachments(listItems(page));
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? `加载附件失败：${translateErrorMessage(error.message)}`
+          : "加载附件失败",
+      );
+    }
+  }
+
+  function openPayableAttachmentsDialog(payable: Payable) {
+    setSelectedPayableId(payable.id);
+    setAttachmentPreview(null);
+    setPayableAttachments([]);
+    setPayableAttachmentsDialogOpen(true);
+    void loadPayableAttachments(payable);
+  }
+
+  function closePayableAttachmentsDialog() {
+    setPayableAttachmentsDialogOpen(false);
+    setPayableAttachments([]);
+    setAttachmentPreview(null);
   }
 
   return (
@@ -2124,16 +2198,57 @@ export default function Home() {
           <span>服务型业务 ERP</span>
         </div>
         <nav className="nav" aria-label="主导航">
-          {modules.map((item) => (
-            <button
-              data-active={active === item.id}
-              key={item.id}
-              onClick={() => setActive(item.id)}
-              type="button"
-            >
-              {item.label}
-            </button>
-          ))}
+          {navItems.map((item) => {
+            if (item.kind === "group") {
+              const isGroupActive = item.children.includes(active);
+
+              return (
+                <div
+                  className="nav-group"
+                  data-active={isGroupActive}
+                  key={item.label}
+                >
+                  <button
+                    className="nav-group-button"
+                    data-active={isGroupActive}
+                    onClick={() => setActive(item.children[0])}
+                    type="button"
+                  >
+                    {item.label}
+                  </button>
+                  <div className="sub-nav" aria-label={item.label}>
+                    {item.children.map((childId) => {
+                      const child = getModuleMeta(childId);
+
+                      return (
+                        <button
+                          data-active={active === child.id}
+                          key={child.id}
+                          onClick={() => setActive(child.id)}
+                          type="button"
+                        >
+                          {child.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            }
+
+            const module = getModuleMeta(item.id);
+
+            return (
+              <button
+                data-active={active === module.id}
+                key={module.id}
+                onClick={() => setActive(module.id)}
+                type="button"
+              >
+                {module.label}
+              </button>
+            );
+          })}
         </nav>
         <div className="session">
           <span>{user?.name ?? "未登录"}</span>
@@ -2387,103 +2502,104 @@ export default function Home() {
 
         {active === "receivableBilling" ? (
           <ReceivableBillingModule
-            approveSelectedReceivable={approveSelectedReceivable}
+            attachmentPreview={attachmentPreview}
             billDialogOpen={billDialogOpen}
-            billInvoiceFiles={billInvoiceFiles}
-            billReceiptFiles={billReceiptFiles}
+            billAttachments={billAttachments}
+            billAttachmentsDialogOpen={billAttachmentsDialogOpen}
+            billStatusDialogOpen={billStatusDialogOpen}
+            billStatusFiles={billStatusFiles}
+            billStatusTarget={billStatusTarget}
             bills={bills}
+            closeBillAttachmentsDialog={closeBillAttachmentsDialog}
             closeBillDialog={closeBillDialog}
+            closeBillStatusDialog={closeBillStatusDialog}
             contracts={contracts}
             createReceivableBill={createReceivableBill}
             customers={customers}
             disabledReason={actionBlockReason("bill.manage")}
-            markSelectedBillInvoiced={markSelectedBillInvoiced}
-            markSelectedBillReceived={markSelectedBillReceived}
+            openAttachmentPreview={(attachment) =>
+              void openAttachmentPreview(attachment)
+            }
+            openBillAttachmentsDialog={openBillAttachmentsDialog}
+            openBillStatusDialog={openBillStatusDialog}
             openCreateReceivableDialog={openCreateReceivableDialog}
             periodMonth={periodMonth}
-            receivableFiles={receivableFiles}
-            receivableSettlements={receivableSettlements}
+            receivableAmount={receivableAmount}
             receivableTab={receivableTab}
             receiptAccount={receiptAccount}
+            saveBillStatus={saveBillStatus}
             selectedBill={selectedBill}
             selectedBillId={selectedBillId}
             selectedContract={selectedContract}
             selectedContractId={selectedContractId}
             selectedCustomerId={selectedCustomerId}
-            setBillInvoiceFiles={(fileList) =>
-              updateBusinessFiles(fileList, setBillInvoiceFiles, "发票源文件")
+            setBillStatusFiles={(fileList) =>
+              updateBusinessFiles(fileList, setBillStatusFiles, "状态附件")
             }
-            setBillReceiptFiles={(fileList) =>
-              updateBusinessFiles(fileList, setBillReceiptFiles, "银行打款回单")
-            }
+            setBillStatusTarget={setBillStatusTarget}
             setReceiptAccount={setReceiptAccount}
             setPeriodMonth={setPeriodMonth}
-            setReceivableFiles={(fileList) =>
-              updateBusinessFiles(fileList, setReceivableFiles, "确认附件")
-            }
+            setReceivableAmount={setReceivableAmount}
             setReceivableTab={setReceivableTab}
             setSelectedBillId={setSelectedBillId}
             setSelectedContractId={setSelectedContractId}
             setSelectedCustomerId={setSelectedCustomerId}
-            addReceivableDetail={addReceivableDetail}
-            addReceivableSettlement={addReceivableSettlement}
-            removeReceivableDetail={removeReceivableDetail}
-            removeReceivableSettlement={removeReceivableSettlement}
-            toggleReceivableMode={toggleReceivableMode}
-            updateReceivableDetail={updateReceivableDetail}
-            updateReceivableSettlement={updateReceivableSettlement}
-            approveDisabledReason={actionBlockReason("bill.approve")}
-            settleDisabledReason={actionBlockReason("receivable.settle")}
+            statusDisabledReason={
+              billStatusTarget === "PENDING_SETTLEMENT"
+                ? actionBlockReason("bill.approve")
+                : actionBlockReason("receivable.settle")
+            }
           />
         ) : null}
 
         {active === "costPayable" ? (
           <CostPayableModule
+            attachmentPreview={attachmentPreview}
             bills={bills}
+            closePayableAttachmentsDialog={closePayableAttachmentsDialog}
             closePayableDialog={closePayableDialog}
+            closePayableStatusDialog={closePayableStatusDialog}
             createCostPayable={createCostPayable}
             disabledReason={actionBlockReason("cost.manage")}
-            markSelectedPayablePaid={markSelectedPayablePaid}
+            openAttachmentPreview={(attachment) =>
+              void openAttachmentPreview(attachment)
+            }
             openCreatePayableDialog={openCreatePayableDialog}
+            openPayableAttachmentsDialog={openPayableAttachmentsDialog}
+            openPayableStatusDialog={openPayableStatusDialog}
             payableAmount={payableAmount}
+            payableAttachments={payableAttachments}
+            payableAttachmentsDialogOpen={payableAttachmentsDialogOpen}
             payableDialogOpen={payableDialogOpen}
             payablePaymentAccount={payablePaymentAccount}
-            payablePaymentFile={payablePaymentFile}
             payableRemarks={payableRemarks}
+            payableStatusDialogOpen={payableStatusDialogOpen}
+            payableStatusFiles={payableStatusFiles}
+            payableStatusTarget={payableStatusTarget}
             payableTab={payableTab}
             payableVendorName={payableVendorName}
             payables={payables}
-            paymentDisabledReason={actionBlockReason("payable.settle")}
+            savePayableStatus={savePayableStatus}
             selectedBillId={selectedBillId}
             selectedPayable={selectedPayable}
             selectedPayableId={selectedPayableId}
             setPayableAmount={setPayableAmount}
             setPayablePaymentAccount={setPayablePaymentAccount}
-            setPayablePaymentFile={(fileList) =>
-              updateBusinessFile(fileList, setPayablePaymentFile, "付款回单")
+            setPayableStatusFiles={(fileList) =>
+              updateBusinessFiles(fileList, setPayableStatusFiles, "状态附件")
             }
+            setPayableStatusTarget={setPayableStatusTarget}
             setPayableRemarks={setPayableRemarks}
             setPayableTab={setPayableTab}
             setPayableVendorName={setPayableVendorName}
             setSelectedBillId={setSelectedBillId}
             setSelectedPayableId={setSelectedPayableId}
+            statusDisabledReason={actionBlockReason("payable.settle")}
           />
         ) : null}
 
         {active === "closing" ? (
-          <ClosingModule
-            closePeriod={closePeriod}
-            periodMonth={periodMonth}
-            profits={profits}
-            reopenPeriod={() =>
-              void submitAction("解锁账期", ["period.reopen"], () =>
-                request(`/periods/${periodMonth}/reopen`, {
-                  method: "POST",
-                  body: JSON.stringify({ reason: "管理员解锁" }),
-                }),
-              )
-            }
-          />
+          <ClosingModule periodMonth={periodMonth} profits={profits} />
         ) : null}
       </main>
     </div>
@@ -2547,7 +2663,7 @@ function DashboardModule({
         </div>
         <ol className="flow-list">
           <li>维护客户、签约主体、合同和服务费规则</li>
-          <li>新增账单应收，填写子结算和结算明细</li>
+          <li>新增账单应收，填写客户、合同、月份和金额</li>
           <li>总负责人审批后进入待结算</li>
           <li>财务上传发票源文件、银行回单并确认到账</li>
           <li>新增关联账单的成本应付，付款后关闭账期</li>
@@ -3593,120 +3709,25 @@ function ContractsModule({
   );
 }
 
-function BillDetail({ bill }: { bill?: Bill }) {
-  if (!bill) {
-    return (
-      <div className="panel">
-        <div className="panel-header">
-          <h2>账单明细</h2>
-          <span>未选择账单</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (bill.settlements?.length) {
-    return (
-      <div className="workspace">
-        {bill.settlements.map((settlement) => (
-          <TablePanel
-            count={`${settlement.items.length} 条`}
-            key={settlement.id}
-            title={settlement.title ?? "子结算"}
-          >
-            <table>
-              <thead>
-                <tr>
-                  <th>客户对接人</th>
-                  <th>产品项目名称</th>
-                  <th>月份</th>
-                  <th>合作模式</th>
-                  <th>合作费用</th>
-                  <th>服务费</th>
-                  <th>总结算费用</th>
-                </tr>
-              </thead>
-              <tbody>
-                {settlement.items.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.customerContactName}</td>
-                    <td>{item.projectName}</td>
-                    <td>{item.periodMonth}</td>
-                    <td className="wrap-cell">
-                      {[item.cooperationModes.join("、"), item.otherModeNote]
-                        .filter(Boolean)
-                        .join("；")}
-                    </td>
-                    <td>{money(item.cooperationFee)}</td>
-                    <td>{money(item.serviceFee)}</td>
-                    <td>{money(item.totalFee)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TablePanel>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <TablePanel title="账单明细" count={`${bill.items?.length ?? 0} 条`}>
-      <table>
-        <thead>
-          <tr>
-            <th>项目</th>
-            <th>说明</th>
-            <th>单价</th>
-            <th>数量</th>
-            <th>金额</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(bill.items ?? []).map((item, index) => (
-            <tr key={item.id ?? `${item.name}-${index}`}>
-              <td>{item.name}</td>
-              <td className="wrap-cell">{item.description ?? "-"}</td>
-              <td>{money(item.amount)}</td>
-              <td>{item.quantity}</td>
-              <td>{money(item.lineTotal)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </TablePanel>
-  );
-}
-
 function ClosingModule({
-  closePeriod,
   periodMonth,
   profits,
-  reopenPeriod,
 }: {
-  closePeriod: (event: FormEvent<HTMLFormElement>) => void;
   periodMonth: string;
   profits: ProfitRow[];
-  reopenPeriod: () => void;
 }) {
   return (
     <section className="workspace two-column">
       <div className="panel">
         <div className="panel-header">
-          <h2>账期控制</h2>
+          <h2>自动结账</h2>
           <span>{periodMonth}</span>
         </div>
-        <form className="module-form" onSubmit={closePeriod}>
+        <div className="module-form">
           <p className="helper-text">
-            关闭账期后，该月账单、成本、开票、收款和付款会进入锁定状态。
+            当应收账单已到账，且该账期关联成本应付均已支付后，系统会自动关闭账期并刷新客户利润。
           </p>
-          <button className="primary" type="submit">
-            关闭当前账期
-          </button>
-          <button onClick={reopenPeriod} type="button">
-            管理员解锁
-          </button>
-        </form>
+        </div>
       </div>
 
       <ProfitTable profits={profits} />
@@ -3715,102 +3736,85 @@ function ClosingModule({
 }
 
 function ReceivableBillingModule({
-  addReceivableDetail,
-  addReceivableSettlement,
-  approveDisabledReason,
-  approveSelectedReceivable,
+  attachmentPreview,
+  billAttachments,
+  billAttachmentsDialogOpen,
   billDialogOpen,
-  billInvoiceFiles,
-  billReceiptFiles,
+  billStatusDialogOpen,
+  billStatusFiles,
+  billStatusTarget,
   bills,
+  closeBillAttachmentsDialog,
   closeBillDialog,
+  closeBillStatusDialog,
   contracts,
   createReceivableBill,
   customers,
   disabledReason,
-  markSelectedBillInvoiced,
-  markSelectedBillReceived,
+  openAttachmentPreview,
+  openBillAttachmentsDialog,
+  openBillStatusDialog,
   openCreateReceivableDialog,
   periodMonth,
-  receivableFiles,
-  receivableSettlements,
+  receivableAmount,
   receivableTab,
   receiptAccount,
-  removeReceivableDetail,
-  removeReceivableSettlement,
+  saveBillStatus,
   selectedBill,
   selectedBillId,
   selectedContract,
   selectedContractId,
   selectedCustomerId,
-  setBillInvoiceFiles,
-  setBillReceiptFiles,
+  setBillStatusFiles,
+  setBillStatusTarget,
   setPeriodMonth,
+  setReceivableAmount,
   setReceiptAccount,
-  setReceivableFiles,
   setReceivableTab,
   setSelectedBillId,
   setSelectedContractId,
   setSelectedCustomerId,
-  settleDisabledReason,
-  toggleReceivableMode,
-  updateReceivableDetail,
-  updateReceivableSettlement,
+  statusDisabledReason,
 }: {
-  addReceivableDetail: (settlementId: string) => void;
-  addReceivableSettlement: () => void;
-  approveDisabledReason: string;
-  approveSelectedReceivable: () => void;
+  attachmentPreview: { attachment: Attachment; url: string } | null;
+  billAttachments: Attachment[];
+  billAttachmentsDialogOpen: boolean;
   billDialogOpen: boolean;
-  billInvoiceFiles: File[];
-  billReceiptFiles: File[];
+  billStatusDialogOpen: boolean;
+  billStatusFiles: File[];
+  billStatusTarget: string;
   bills: Bill[];
+  closeBillAttachmentsDialog: () => void;
   closeBillDialog: () => void;
+  closeBillStatusDialog: () => void;
   contracts: Contract[];
   createReceivableBill: (event: FormEvent<HTMLFormElement>) => void;
   customers: Customer[];
   disabledReason: string;
-  markSelectedBillInvoiced: () => void;
-  markSelectedBillReceived: () => void;
+  openAttachmentPreview: (attachment: Attachment) => void;
+  openBillAttachmentsDialog: (bill: Bill) => void;
+  openBillStatusDialog: (bill: Bill) => void;
   openCreateReceivableDialog: () => void;
   periodMonth: string;
-  receivableFiles: File[];
-  receivableSettlements: ReceivableSettlementInput[];
+  receivableAmount: string;
   receivableTab: "open" | "received";
   receiptAccount: string;
-  removeReceivableDetail: (settlementId: string, detailId: string) => void;
-  removeReceivableSettlement: (settlementId: string) => void;
+  saveBillStatus: (event: FormEvent<HTMLFormElement>) => void;
   selectedBill?: Bill;
   selectedBillId: string;
   selectedContract?: Contract;
   selectedContractId: string;
   selectedCustomerId: string;
-  setBillInvoiceFiles: (fileList: FileList | null) => void;
-  setBillReceiptFiles: (fileList: FileList | null) => void;
+  setBillStatusFiles: (fileList: FileList | null) => void;
+  setBillStatusTarget: (value: string) => void;
   setPeriodMonth: (value: string) => void;
+  setReceivableAmount: (value: string) => void;
   setReceiptAccount: (value: string) => void;
-  setReceivableFiles: (fileList: FileList | null) => void;
   setReceivableTab: (value: "open" | "received") => void;
   setSelectedBillId: (value: string) => void;
   setSelectedContractId: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
-  settleDisabledReason: string;
-  toggleReceivableMode: (
-    settlementId: string,
-    detail: ReceivableDetailInput,
-    mode: string,
-  ) => void;
-  updateReceivableDetail: (
-    settlementId: string,
-    detailId: string,
-    patch: Partial<ReceivableDetailInput>,
-  ) => void;
-  updateReceivableSettlement: (
-    settlementId: string,
-    updater: (
-      settlement: ReceivableSettlementInput,
-    ) => ReceivableSettlementInput,
-  ) => void;
+  statusDisabledReason: string;
 }) {
   const customerContracts = contracts.filter(
     (contract) =>
@@ -3821,25 +3825,13 @@ function ReceivableBillingModule({
   const visibleBills = bills.filter((bill) =>
     receivableTab === "received"
       ? bill.status === "RECEIVED"
-      : bill.status !== "RECEIVED",
+      : ["PENDING_APPROVAL", "PENDING_SETTLEMENT", "INVOICED"].includes(
+          bill.status,
+        ),
   );
-  const serviceFeeRate = Number(selectedContract?.serviceFeeRate ?? 0);
-  const previewTotal = receivableSettlements.reduce(
-    (total, settlement) =>
-      total +
-      settlement.details.reduce((nextTotal, detail) => {
-        const cooperationFee = Number(detail.cooperationFee || 0);
-        const serviceFee = cooperationFee * (serviceFeeRate / 100);
-        return nextTotal + cooperationFee + serviceFee;
-      }, 0),
-    0,
-  );
-  const canApprove = selectedBill?.status === "PENDING_APPROVAL";
-  const canMarkInvoiced =
-    selectedBill?.status === "PENDING_SETTLEMENT" &&
-    billInvoiceFiles.length > 0;
-  const canMarkReceived =
-    selectedBill?.status === "INVOICED" && billReceiptFiles.length > 0;
+  const nextStatus = selectedBill
+    ? nextReceivableStatus(selectedBill.status)
+    : "";
 
   return (
     <section className="workspace billing-layout">
@@ -3878,7 +3870,9 @@ function ReceivableBillingModule({
         </div>
         <BillsTable
           bills={visibleBills}
+          onAttachments={openBillAttachmentsDialog}
           onSelect={setSelectedBillId}
+          onStatusEdit={openBillStatusDialog}
           selectedBillId={selectedBillId}
         />
       </TablePanel>
@@ -3954,190 +3948,26 @@ function ReceivableBillingModule({
                     value={periodMonth}
                   />
                 </label>
+                <label>
+                  金额
+                  <input
+                    inputMode="decimal"
+                    onChange={(event) =>
+                      setReceivableAmount(event.target.value)
+                    }
+                    value={receivableAmount}
+                  />
+                </label>
                 <div className="definition-list compact">
                   <div>
-                    <span>合同服务费比例</span>
+                    <span>我方主体</span>
                     <strong>
-                      {rateText(selectedContract?.serviceFeeRate)}
+                      {selectedContract?.signingEntity?.shortName ?? "-"}
                     </strong>
-                  </div>
-                  <div>
-                    <span>账单预估</span>
-                    <strong>{money(previewTotal)}</strong>
                   </div>
                 </div>
               </div>
 
-              <div className="nested-editor">
-                {receivableSettlements.map((settlement) => (
-                  <div className="nested-block" key={settlement.id}>
-                    <div className="nested-title">
-                      <input
-                        aria-label="子结算名称"
-                        onChange={(event) =>
-                          updateReceivableSettlement(
-                            settlement.id,
-                            (current) => ({
-                              ...current,
-                              title: event.target.value,
-                            }),
-                          )
-                        }
-                        value={settlement.title}
-                      />
-                      <button
-                        onClick={() =>
-                          removeReceivableSettlement(settlement.id)
-                        }
-                        type="button"
-                      >
-                        删除子结算
-                      </button>
-                    </div>
-                    {settlement.details.map((detail) => {
-                      const cooperationFee = Number(detail.cooperationFee || 0);
-                      const serviceFee =
-                        cooperationFee * (serviceFeeRate / 100);
-                      return (
-                        <div className="detail-grid" key={detail.id}>
-                          <label>
-                            客户对接人
-                            <input
-                              onChange={(event) =>
-                                updateReceivableDetail(
-                                  settlement.id,
-                                  detail.id,
-                                  { customerContactName: event.target.value },
-                                )
-                              }
-                              value={detail.customerContactName}
-                            />
-                          </label>
-                          <label>
-                            产品项目名称
-                            <input
-                              onChange={(event) =>
-                                updateReceivableDetail(
-                                  settlement.id,
-                                  detail.id,
-                                  { projectName: event.target.value },
-                                )
-                              }
-                              value={detail.projectName}
-                            />
-                          </label>
-                          <label>
-                            月份
-                            <input
-                              onChange={(event) =>
-                                updateReceivableDetail(
-                                  settlement.id,
-                                  detail.id,
-                                  { periodMonth: event.target.value },
-                                )
-                              }
-                              type="month"
-                              value={detail.periodMonth}
-                            />
-                          </label>
-                          <label>
-                            合作费用
-                            <input
-                              inputMode="decimal"
-                              onChange={(event) =>
-                                updateReceivableDetail(
-                                  settlement.id,
-                                  detail.id,
-                                  { cooperationFee: event.target.value },
-                                )
-                              }
-                              value={detail.cooperationFee}
-                            />
-                          </label>
-                          <div className="mode-options">
-                            {cooperationModes.map((mode) => (
-                              <label key={mode}>
-                                <input
-                                  checked={detail.cooperationModes.includes(
-                                    mode,
-                                  )}
-                                  onChange={() =>
-                                    toggleReceivableMode(
-                                      settlement.id,
-                                      detail,
-                                      mode,
-                                    )
-                                  }
-                                  type="checkbox"
-                                />
-                                {mode}
-                              </label>
-                            ))}
-                          </div>
-                          {detail.cooperationModes.includes("其他") ? (
-                            <label>
-                              其他备注
-                              <input
-                                onChange={(event) =>
-                                  updateReceivableDetail(
-                                    settlement.id,
-                                    detail.id,
-                                    { otherModeNote: event.target.value },
-                                  )
-                                }
-                                value={detail.otherModeNote}
-                              />
-                            </label>
-                          ) : null}
-                          <div className="definition-list compact">
-                            <div>
-                              <span>服务费</span>
-                              <strong>{money(serviceFee)}</strong>
-                            </div>
-                            <div>
-                              <span>总结算费用</span>
-                              <strong>
-                                {money(cooperationFee + serviceFee)}
-                              </strong>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() =>
-                              removeReceivableDetail(settlement.id, detail.id)
-                            }
-                            type="button"
-                          >
-                            删除明细
-                          </button>
-                        </div>
-                      );
-                    })}
-                    <button
-                      onClick={() => addReceivableDetail(settlement.id)}
-                      type="button"
-                    >
-                      添加结算明细
-                    </button>
-                  </div>
-                ))}
-                <button onClick={addReceivableSettlement} type="button">
-                  添加子结算
-                </button>
-              </div>
-
-              <label>
-                结算单、邮件确认截图、微信确认截图
-                <input
-                  accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
-                  multiple
-                  onChange={(event) => setReceivableFiles(event.target.files)}
-                  type="file"
-                />
-              </label>
-              <small className="file-list">
-                {receivableFiles.map((file) => file.name).join("、") ||
-                  "未选择确认附件"}
-              </small>
               <div className="modal-actions">
                 <button onClick={closeBillDialog} type="button">
                   取消
@@ -4151,136 +3981,257 @@ function ReceivableBillingModule({
         </div>
       ) : null}
 
-      <div className="panel">
-        <div className="panel-header">
-          <h2>审批与结算动作</h2>
-          <span>{selectedBill?.billNo ?? "未选择账单"}</span>
+      {billStatusDialogOpen && selectedBill ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeBillStatusDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>修改账单状态</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeBillStatusDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={saveBillStatus}>
+              <div className="definition-list compact">
+                <div>
+                  <span>账单号</span>
+                  <strong>{selectedBill.billNo}</strong>
+                </div>
+                <div>
+                  <span>当前状态</span>
+                  <strong>{billStatus(selectedBill.status)}</strong>
+                </div>
+              </div>
+              <label>
+                修改为
+                <select
+                  onChange={(event) => setBillStatusTarget(event.target.value)}
+                  value={billStatusTarget}
+                >
+                  {nextStatus ? (
+                    <option value={nextStatus}>{billStatus(nextStatus)}</option>
+                  ) : null}
+                </select>
+              </label>
+              {billStatusTarget === "RECEIVED" ? (
+                <label>
+                  收款账户
+                  <input
+                    onChange={(event) => setReceiptAccount(event.target.value)}
+                    value={receiptAccount}
+                  />
+                </label>
+              ) : null}
+              <label>
+                状态附件
+                <input
+                  accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
+                  multiple
+                  onChange={(event) => setBillStatusFiles(event.target.files)}
+                  type="file"
+                />
+              </label>
+              <small className="file-list">
+                {billStatusFiles.map((file) => file.name).join("、") ||
+                  "未选择状态附件"}
+              </small>
+              {statusDisabledReason ? (
+                <small className="form-note">{statusDisabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closeBillStatusDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(statusDisabledReason) || !nextStatus}
+                  type="submit"
+                >
+                  保存状态
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-        <div className="settlement-flow">
-          <button
-            disabled={Boolean(approveDisabledReason) || !canApprove}
-            onClick={approveSelectedReceivable}
-            type="button"
-          >
-            总负责人审批通过
-          </button>
-          <label>
-            发票源文件
-            <input
-              accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
-              multiple
-              onChange={(event) => setBillInvoiceFiles(event.target.files)}
-              type="file"
-            />
-          </label>
-          <button
-            disabled={Boolean(settleDisabledReason) || !canMarkInvoiced}
-            onClick={markSelectedBillInvoiced}
-            type="button"
-          >
-            修改为已开票
-          </button>
-          <label>
-            银行打款回单截图
-            <input
-              accept="image/png,image/jpeg,.png,.jpg,.jpeg,application/pdf,.pdf"
-              multiple
-              onChange={(event) => setBillReceiptFiles(event.target.files)}
-              type="file"
-            />
-          </label>
-          <label>
-            收款账户
-            <input
-              onChange={(event) => setReceiptAccount(event.target.value)}
-              value={receiptAccount}
-            />
-          </label>
-          <button
-            className="primary"
-            disabled={Boolean(settleDisabledReason) || !canMarkReceived}
-            onClick={markSelectedBillReceived}
-            type="button"
-          >
-            修改为已到账
-          </button>
-          <small className="file-list">
-            {[...billInvoiceFiles, ...billReceiptFiles]
-              .map((file) => file.name)
-              .join("、") || "未选择财务附件"}
-          </small>
-        </div>
-      </div>
+      ) : null}
 
-      <BillDetail bill={selectedBill} />
+      {billAttachmentsDialogOpen && selectedBill ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closeBillAttachmentsDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>账单附件</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closeBillAttachmentsDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="attachment-list">
+              {billAttachments.length > 0 ? (
+                billAttachments.map((attachment) => (
+                  <button
+                    className="attachment-row"
+                    key={attachment.id}
+                    onClick={() => openAttachmentPreview(attachment)}
+                    type="button"
+                  >
+                    <span>{attachment.fileName}</span>
+                    <strong>
+                      {attachmentStatusLabel(attachment, selectedBill)}
+                    </strong>
+                    <small>{dateTimeText(attachment.createdAt)}</small>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">暂无附件</div>
+              )}
+            </div>
+            {attachmentPreview ? (
+              <div className="attachment-preview">
+                <div className="panel-header">
+                  <h2>{attachmentPreview.attachment.fileName}</h2>
+                  <a
+                    href={attachmentPreview.url}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    下载
+                  </a>
+                </div>
+                {isPreviewableAttachment(attachmentPreview.attachment) ? (
+                  attachmentPreview.attachment.contentType?.startsWith(
+                    "image/",
+                  ) ? (
+                    <img
+                      alt={attachmentPreview.attachment.fileName}
+                      src={attachmentPreview.url}
+                    />
+                  ) : (
+                    <iframe
+                      src={attachmentPreview.url}
+                      title={attachmentPreview.attachment.fileName}
+                    />
+                  )
+                ) : (
+                  <div className="empty-state">该附件请下载查看</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function CostPayableModule({
+  attachmentPreview,
   bills,
+  closePayableAttachmentsDialog,
   closePayableDialog,
+  closePayableStatusDialog,
   createCostPayable,
   disabledReason,
-  markSelectedPayablePaid,
+  openAttachmentPreview,
   openCreatePayableDialog,
+  openPayableAttachmentsDialog,
+  openPayableStatusDialog,
   payableAmount,
+  payableAttachments,
+  payableAttachmentsDialogOpen,
   payableDialogOpen,
   payablePaymentAccount,
-  payablePaymentFile,
   payableRemarks,
+  payableStatusDialogOpen,
+  payableStatusFiles,
+  payableStatusTarget,
   payableTab,
   payableVendorName,
   payables,
-  paymentDisabledReason,
+  savePayableStatus,
   selectedBillId,
   selectedPayable,
   selectedPayableId,
   setPayableAmount,
   setPayablePaymentAccount,
-  setPayablePaymentFile,
   setPayableRemarks,
+  setPayableStatusFiles,
+  setPayableStatusTarget,
   setPayableTab,
   setPayableVendorName,
   setSelectedBillId,
   setSelectedPayableId,
+  statusDisabledReason,
 }: {
+  attachmentPreview: { attachment: Attachment; url: string } | null;
   bills: Bill[];
+  closePayableAttachmentsDialog: () => void;
   closePayableDialog: () => void;
+  closePayableStatusDialog: () => void;
   createCostPayable: (event: FormEvent<HTMLFormElement>) => void;
   disabledReason: string;
-  markSelectedPayablePaid: () => void;
+  openAttachmentPreview: (attachment: Attachment) => void;
   openCreatePayableDialog: () => void;
+  openPayableAttachmentsDialog: (payable: Payable) => void;
+  openPayableStatusDialog: (payable: Payable) => void;
   payableAmount: string;
+  payableAttachments: Attachment[];
+  payableAttachmentsDialogOpen: boolean;
   payableDialogOpen: boolean;
   payablePaymentAccount: string;
-  payablePaymentFile: File | null;
   payableRemarks: string;
+  payableStatusDialogOpen: boolean;
+  payableStatusFiles: File[];
+  payableStatusTarget: string;
   payableTab: "open" | "paid";
   payableVendorName: string;
   payables: Payable[];
-  paymentDisabledReason: string;
+  savePayableStatus: (event: FormEvent<HTMLFormElement>) => void;
   selectedBillId: string;
   selectedPayable?: Payable;
   selectedPayableId: string;
   setPayableAmount: (value: string) => void;
   setPayablePaymentAccount: (value: string) => void;
-  setPayablePaymentFile: (fileList: FileList | null) => void;
   setPayableRemarks: (value: string) => void;
+  setPayableStatusFiles: (fileList: FileList | null) => void;
+  setPayableStatusTarget: (value: string) => void;
   setPayableTab: (value: "open" | "paid") => void;
   setPayableVendorName: (value: string) => void;
   setSelectedBillId: (value: string) => void;
   setSelectedPayableId: (value: string) => void;
+  statusDisabledReason: string;
 }) {
   const visiblePayables = payables.filter((payable) =>
     payableTab === "paid"
       ? payable.status === "PAID"
-      : payable.status !== "PAID",
+      : payable.status === "UNPAID" || payable.status === "PARTIALLY_PAID",
   );
-  const unpaidAmount = selectedPayable
-    ? Number(selectedPayable.amount ?? 0) -
-      Number(selectedPayable.paidAmount ?? 0)
-    : 0;
+  const nextStatus = selectedPayable
+    ? nextPayableStatus(selectedPayable.status)
+    : "";
 
   return (
     <section className="workspace billing-layout">
@@ -4320,13 +4271,13 @@ function CostPayableModule({
         <table>
           <thead>
             <tr>
-              <th>供应商/收款方</th>
+              <th>收款方</th>
               <th>关联账单</th>
               <th>客户</th>
               <th>月份</th>
               <th>应付金额</th>
-              <th>已付</th>
               <th>状态</th>
+              <th>附件</th>
             </tr>
           </thead>
           <tbody>
@@ -4343,11 +4294,35 @@ function CostPayableModule({
                   {payable.periodMonth ?? payable.bill?.periodMonth ?? "-"}
                 </td>
                 <td>{money(payable.amount)}</td>
-                <td>{money(payable.paidAmount)}</td>
                 <td>
-                  <span className="status">
-                    {payableStatusText[payable.status] ?? payable.status}
-                  </span>
+                  {nextPayableStatus(payable.status) ? (
+                    <button
+                      className="status status-button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openPayableStatusDialog(payable);
+                      }}
+                      type="button"
+                    >
+                      {payableStatusText[payable.status] ?? payable.status}
+                    </button>
+                  ) : (
+                    <span className="status">
+                      {payableStatusText[payable.status] ?? payable.status}
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <button
+                    className="link-button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openPayableAttachmentsDialog(payable);
+                    }}
+                    type="button"
+                  >
+                    查看附件
+                  </button>
                 </td>
               </tr>
             ))}
@@ -4393,7 +4368,7 @@ function CostPayableModule({
                 </select>
               </label>
               <label>
-                供应商/收款方
+                收款方
                 <input
                   onChange={(event) => setPayableVendorName(event.target.value)}
                   value={payableVendorName}
@@ -4427,62 +4402,195 @@ function CostPayableModule({
         </div>
       ) : null}
 
-      <div className="panel">
-        <div className="panel-header">
-          <h2>付款登记</h2>
-          <span>{selectedPayable?.vendorName ?? "未选择应付"}</span>
-        </div>
-        <div className="settlement-flow">
-          <div className="definition-list compact">
-            <div>
-              <span>未付金额</span>
-              <strong>{money(unpaidAmount)}</strong>
-            </div>
-          </div>
-          <label>
-            付款账户
-            <input
-              onChange={(event) => setPayablePaymentAccount(event.target.value)}
-              value={payablePaymentAccount}
-            />
-          </label>
-          <label>
-            付款回单
-            <input
-              accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
-              onChange={(event) => setPayablePaymentFile(event.target.files)}
-              type="file"
-            />
-          </label>
-          <button
-            className="primary"
-            disabled={
-              Boolean(paymentDisabledReason) ||
-              !selectedPayable ||
-              unpaidAmount <= 0 ||
-              !payablePaymentFile
-            }
-            onClick={markSelectedPayablePaid}
-            type="button"
+      {payableStatusDialogOpen && selectedPayable ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closePayableStatusDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel"
+            onMouseDown={(event) => event.stopPropagation()}
           >
-            标记已付
-          </button>
-          <small className="file-list">
-            {payablePaymentFile?.name ?? "未选择付款回单"}
-          </small>
+            <div className="panel-header">
+              <h2>修改应付状态</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closePayableStatusDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="module-form" onSubmit={savePayableStatus}>
+              <div className="definition-list compact">
+                <div>
+                  <span>收款方</span>
+                  <strong>{selectedPayable.vendorName}</strong>
+                </div>
+                <div>
+                  <span>当前状态</span>
+                  <strong>
+                    {payableStatusText[selectedPayable.status] ??
+                      selectedPayable.status}
+                  </strong>
+                </div>
+              </div>
+              <label>
+                修改为
+                <select
+                  onChange={(event) =>
+                    setPayableStatusTarget(event.target.value)
+                  }
+                  value={payableStatusTarget}
+                >
+                  {nextStatus ? (
+                    <option value={nextStatus}>
+                      {payableStatusText[nextStatus] ?? nextStatus}
+                    </option>
+                  ) : null}
+                </select>
+              </label>
+              <label>
+                付款账户
+                <input
+                  onChange={(event) =>
+                    setPayablePaymentAccount(event.target.value)
+                  }
+                  value={payablePaymentAccount}
+                />
+              </label>
+              <label>
+                状态附件
+                <input
+                  accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
+                  multiple
+                  onChange={(event) =>
+                    setPayableStatusFiles(event.target.files)
+                  }
+                  type="file"
+                />
+              </label>
+              <small className="file-list">
+                {payableStatusFiles.map((file) => file.name).join("、") ||
+                  "未选择状态附件"}
+              </small>
+              {statusDisabledReason ? (
+                <small className="form-note">{statusDisabledReason}</small>
+              ) : null}
+              <div className="modal-actions">
+                <button onClick={closePayableStatusDialog} type="button">
+                  取消
+                </button>
+                <button
+                  className="primary"
+                  disabled={Boolean(statusDisabledReason) || !nextStatus}
+                  type="submit"
+                >
+                  保存状态
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-      </div>
+      ) : null}
+
+      {payableAttachmentsDialogOpen && selectedPayable ? (
+        <div
+          aria-modal="true"
+          className="modal-backdrop"
+          onMouseDown={closePayableAttachmentsDialog}
+          role="dialog"
+        >
+          <div
+            className="modal-panel wide"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h2>应付附件</h2>
+              <button
+                aria-label="关闭"
+                className="icon-button"
+                onClick={closePayableAttachmentsDialog}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <div className="attachment-list">
+              {payableAttachments.length > 0 ? (
+                payableAttachments.map((attachment) => (
+                  <button
+                    className="attachment-row"
+                    key={attachment.id}
+                    onClick={() => openAttachmentPreview(attachment)}
+                    type="button"
+                  >
+                    <span>{attachment.fileName}</span>
+                    <strong>
+                      {payableAttachmentStatusLabel(
+                        attachment,
+                        selectedPayable,
+                      )}
+                    </strong>
+                    <small>{dateTimeText(attachment.createdAt)}</small>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">暂无附件</div>
+              )}
+            </div>
+            {attachmentPreview ? (
+              <div className="attachment-preview">
+                <div className="panel-header">
+                  <h2>{attachmentPreview.attachment.fileName}</h2>
+                  <a
+                    href={attachmentPreview.url}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    下载
+                  </a>
+                </div>
+                {isPreviewableAttachment(attachmentPreview.attachment) ? (
+                  attachmentPreview.attachment.contentType?.startsWith(
+                    "image/",
+                  ) ? (
+                    <img
+                      alt={attachmentPreview.attachment.fileName}
+                      src={attachmentPreview.url}
+                    />
+                  ) : (
+                    <iframe
+                      src={attachmentPreview.url}
+                      title={attachmentPreview.attachment.fileName}
+                    />
+                  )
+                ) : (
+                  <div className="empty-state">该附件请下载查看</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function BillsTable({
   bills,
+  onAttachments,
   onSelect,
+  onStatusEdit,
   selectedBillId,
 }: {
   bills: Bill[];
+  onAttachments?: (bill: Bill) => void;
   onSelect: (id: string) => void;
+  onStatusEdit?: (bill: Bill) => void;
   selectedBillId?: string;
 }) {
   return (
@@ -4491,10 +4599,11 @@ function BillsTable({
         <tr>
           <th>账单号</th>
           <th>客户</th>
+          <th>我方主体</th>
+          <th>月份</th>
+          <th>应收金额</th>
           <th>状态</th>
-          <th>金额</th>
-          <th>已开票</th>
-          <th>已收</th>
+          <th>附件</th>
         </tr>
       </thead>
       <tbody>
@@ -4506,12 +4615,41 @@ function BillsTable({
           >
             <td>{bill.billNo}</td>
             <td>{bill.customer?.name ?? "-"}</td>
-            <td>
-              <span className="status">{billStatus(bill.status)}</span>
-            </td>
+            <td>{billSigningEntityName(bill)}</td>
+            <td>{bill.periodMonth}</td>
             <td>{money(bill.totalAmount)}</td>
-            <td>{money(bill.invoiceAmount)}</td>
-            <td>{money(bill.receiptAmount)}</td>
+            <td>
+              {onStatusEdit && nextReceivableStatus(bill.status) ? (
+                <button
+                  className="status status-button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onStatusEdit(bill);
+                  }}
+                  type="button"
+                >
+                  {billStatus(bill.status)}
+                </button>
+              ) : (
+                <span className="status">{billStatus(bill.status)}</span>
+              )}
+            </td>
+            <td>
+              {onAttachments ? (
+                <button
+                  className="link-button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onAttachments(bill);
+                  }}
+                  type="button"
+                >
+                  查看附件（{billAttachmentIds(bill).length}）
+                </button>
+              ) : (
+                `${billAttachmentIds(bill).length} 个`
+              )}
+            </td>
           </tr>
         ))}
       </tbody>

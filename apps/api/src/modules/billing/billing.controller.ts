@@ -106,8 +106,9 @@ export class BillingController {
   approveReceivable(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
+    @Body() body: Payload,
   ) {
-    return this.billing.approveReceivable(user, id);
+    return this.billing.approveReceivable(user, id, body);
   }
 
   @Post("bills/:id/evidence")

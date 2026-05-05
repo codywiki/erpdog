@@ -284,7 +284,10 @@ export class BillingService {
 
   async createManualBill(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
-    if (arrayField<Payload>(body, "settlements").length > 0) {
+    if (
+      optionalString(body, "billKind") === "RECEIVABLE" ||
+      arrayField<Payload>(body, "settlements").length > 0
+    ) {
       return this.createReceivableBill(user, body);
     }
 
@@ -388,7 +391,14 @@ export class BillingService {
     const serviceFeeRate = new Prisma.Decimal(contract.serviceFeeRate ?? 0);
     const settlementInputs = arrayField<Payload>(body, "settlements");
     if (!settlementInputs.length) {
-      throw new BadRequestException("settlements is required.");
+      return this.createFlatReceivableBill(user, {
+        customerId,
+        contractId,
+        periodMonth,
+        totalAmount: positiveMoney(body.totalAmount, "totalAmount"),
+        dueDate: optionalDate(body, "dueDate"),
+        billNo: optionalString(body, "billNo"),
+      });
     }
 
     const settlements = settlementInputs.map((settlement, settlementIndex) => {
@@ -533,6 +543,65 @@ export class BillingService {
     return this.presentBill(created);
   }
 
+  private async createFlatReceivableBill(
+    user: AuthenticatedUser,
+    input: {
+      customerId: string;
+      contractId: string;
+      periodMonth: string;
+      totalAmount: Prisma.Decimal;
+      dueDate?: Date;
+      billNo?: string;
+    },
+  ) {
+    const created = await this.prisma.$transaction(
+      async (tx) =>
+        tx.bill.create({
+          data: {
+            orgId: user.orgId,
+            customerId: input.customerId,
+            contractId: input.contractId,
+            billNo:
+              input.billNo ??
+              `AR-${input.periodMonth}-${Date.now().toString(36).toUpperCase()}`,
+            periodMonth: input.periodMonth,
+            status: BillStatus.PENDING_APPROVAL,
+            approvalRequestedAt: new Date(),
+            dueDate: input.dueDate,
+            subtotal: input.totalAmount,
+            totalAmount: input.totalAmount,
+            statusEvents: {
+              create: {
+                toStatus: BillStatus.PENDING_APPROVAL,
+                note: "Receivable bill submitted for owner approval.",
+                actorUserId: user.id,
+              },
+            },
+          },
+          include: this.billInclude(),
+        }),
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+
+    await this.audit.log({
+      orgId: user.orgId,
+      actorUserId: user.id,
+      action: "bill.receivable_create",
+      entityType: "bill",
+      entityId: created.id,
+      after: {
+        billNo: created.billNo,
+        periodMonth: input.periodMonth,
+        totalAmount: input.totalAmount.toString(),
+        status: created.status,
+      },
+    });
+
+    return this.presentBill(created);
+  }
+
   async transition(
     user: AuthenticatedUser,
     billId: string,
@@ -639,7 +708,12 @@ export class BillingService {
     return this.presentBill(updated);
   }
 
-  async approveReceivable(user: AuthenticatedUser, billId: string) {
+  async approveReceivable(
+    user: AuthenticatedUser,
+    billId: string,
+    rawBody: unknown = {},
+  ) {
+    const body = bodyObject(rawBody);
     const bill = await this.prisma.bill.findFirst({
       where: { id: billId, orgId: user.orgId },
     });
@@ -647,9 +721,10 @@ export class BillingService {
       throw new NotFoundException("Bill not found.");
     }
     await this.customers.ensureCustomerAccess(user, bill.customerId);
-    const evidenceAttachmentIds = this.jsonStringArray(
-      bill.evidenceAttachmentIds,
-    );
+    const uploadedAttachmentIds = this.attachmentIds(body, "attachmentIds");
+    const evidenceAttachmentIds = uploadedAttachmentIds.length
+      ? uploadedAttachmentIds
+      : this.jsonStringArray(bill.evidenceAttachmentIds);
     if (!evidenceAttachmentIds.length) {
       throw new BadRequestException(
         "Evidence attachments are required before approval.",
@@ -669,6 +744,7 @@ export class BillingService {
       where: { id: billId },
       data: {
         status: BillStatus.PENDING_SETTLEMENT,
+        evidenceAttachmentIds,
         approvedAt: new Date(),
         approvedById: user.id,
         statusEvents: {
@@ -952,6 +1028,12 @@ export class BillingService {
       after: { status: updated.status, receiptAttachmentIds },
     });
 
+    await this.periodLocks.autoCloseIfReady(
+      user.orgId,
+      updated.periodMonth,
+      user.id,
+    );
+
     return this.presentBill(updated);
   }
 
@@ -1164,7 +1246,23 @@ export class BillingService {
       customer: {
         select: { id: true, code: true, name: true, fullName: true },
       },
-      contract: { select: { id: true, code: true, name: true } },
+      contract: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          signingEntity: {
+            select: {
+              id: true,
+              code: true,
+              shortName: true,
+              fullName: true,
+              legalRepresentative: true,
+              taxpayerType: true,
+            },
+          },
+        },
+      },
       items: { orderBy: { createdAt: "asc" } },
       settlements: {
         orderBy: { sortOrder: "asc" },

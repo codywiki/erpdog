@@ -633,7 +633,10 @@ export class FinanceService {
           customer: true,
           bill: { include: { customer: true } },
           category: true,
-          paymentAllocations: true,
+          paymentAllocations: {
+            include: { payment: true },
+            orderBy: { createdAt: "desc" },
+          },
         },
         orderBy: { createdAt: "desc" },
         skip: pagination.skip,
@@ -1100,6 +1103,32 @@ export class FinanceService {
       },
     });
 
+    const payableIds = payment.allocations
+      .map((allocation) => allocation.payableId)
+      .filter((id): id is string => Boolean(id));
+    if (payableIds.length) {
+      const affectedPayables = await this.prisma.payable.findMany({
+        where: { orgId: user.orgId, id: { in: payableIds } },
+        select: { periodMonth: true },
+      });
+      const affectedPeriodMonths = Array.from(
+        new Set(
+          affectedPayables
+            .map((payable) => payable.periodMonth)
+            .filter((periodMonth): periodMonth is string =>
+              Boolean(periodMonth),
+            ),
+        ),
+      );
+      for (const affectedPeriodMonth of affectedPeriodMonths) {
+        await this.periodLocks.autoCloseIfReady(
+          user.orgId,
+          affectedPeriodMonth,
+          user.id,
+        );
+      }
+    }
+
     return payment;
   }
 
@@ -1502,25 +1531,50 @@ export class FinanceService {
       },
       _sum: { totalAmount: true },
     });
-    const costGroups = await this.prisma.costEntry.groupBy({
-      by: ["customerId"],
-      where: {
-        orgId: user.orgId,
-        customerId: { in: customerIds },
-        ...(periodMonth ? { periodMonth } : {}),
-      },
-      _sum: { amount: true },
-    });
+    const [costGroups, directPayableGroups] = await Promise.all([
+      this.prisma.costEntry.groupBy({
+        by: ["customerId"],
+        where: {
+          orgId: user.orgId,
+          customerId: { in: customerIds },
+          ...(periodMonth ? { periodMonth } : {}),
+        },
+        _sum: { amount: true },
+      }),
+      this.prisma.payable.groupBy({
+        by: ["customerId"],
+        where: {
+          orgId: user.orgId,
+          customerId: { in: customerIds },
+          costEntryId: null,
+          status: { not: "VOIDED" },
+          ...(periodMonth ? { periodMonth } : {}),
+        },
+        _sum: { amount: true },
+      }),
+    ]);
+    const costByCustomer = new Map<string, Prisma.Decimal>();
+    for (const group of costGroups) {
+      costByCustomer.set(
+        group.customerId,
+        new Prisma.Decimal(group._sum.amount ?? 0),
+      );
+    }
+    for (const group of directPayableGroups) {
+      if (!group.customerId) {
+        continue;
+      }
+      const existing =
+        costByCustomer.get(group.customerId) ?? new Prisma.Decimal(0);
+      costByCustomer.set(
+        group.customerId,
+        existing.plus(group._sum.amount ?? 0),
+      );
+    }
     const incomeByCustomer = new Map(
       billGroups.map((group) => [
         group.customerId,
         new Prisma.Decimal(group._sum.totalAmount ?? 0),
-      ]),
-    );
-    const costByCustomer = new Map(
-      costGroups.map((group) => [
-        group.customerId,
-        new Prisma.Decimal(group._sum.amount ?? 0),
       ]),
     );
 
@@ -2302,35 +2356,49 @@ export class FinanceService {
   }
 
   private async periodSnapshot(orgId: string, periodMonth: string) {
-    const [billSum, costSum, receiptSum, payableOpen] = await Promise.all([
-      this.prisma.bill.aggregate({
-        where: { orgId, periodMonth, status: { not: "VOIDED" } },
-        _sum: { totalAmount: true },
-        _count: true,
-      }),
-      this.prisma.costEntry.aggregate({
-        where: { orgId, periodMonth },
-        _sum: { amount: true },
-        _count: true,
-      }),
-      this.prisma.receiptAllocation.aggregate({
-        where: {
-          bill: { orgId, periodMonth },
-          receipt: { status: { not: "REVERSED" } },
-        },
-        _sum: { amount: true },
-        _count: true,
-      }),
-      this.prisma.payable.count({
-        where: { orgId, periodMonth, status: { notIn: ["PAID", "VOIDED"] } },
-      }),
-    ]);
+    const [billSum, costEntrySum, directPayableSum, receiptSum, payableOpen] =
+      await Promise.all([
+        this.prisma.bill.aggregate({
+          where: { orgId, periodMonth, status: { not: "VOIDED" } },
+          _sum: { totalAmount: true },
+          _count: true,
+        }),
+        this.prisma.costEntry.aggregate({
+          where: { orgId, periodMonth },
+          _sum: { amount: true },
+          _count: true,
+        }),
+        this.prisma.payable.aggregate({
+          where: {
+            orgId,
+            periodMonth,
+            costEntryId: null,
+            status: { not: "VOIDED" },
+          },
+          _sum: { amount: true },
+          _count: true,
+        }),
+        this.prisma.receiptAllocation.aggregate({
+          where: {
+            bill: { orgId, periodMonth },
+            receipt: { status: { not: "REVERSED" } },
+          },
+          _sum: { amount: true },
+          _count: true,
+        }),
+        this.prisma.payable.count({
+          where: { orgId, periodMonth, status: { notIn: ["PAID", "VOIDED"] } },
+        }),
+      ]);
+    const costAmount = new Prisma.Decimal(costEntrySum._sum.amount ?? 0).plus(
+      directPayableSum._sum.amount ?? 0,
+    );
 
     return {
       billCount: billSum._count,
       billAmount: decimalString(billSum._sum.totalAmount ?? 0),
-      costCount: costSum._count,
-      costAmount: decimalString(costSum._sum.amount ?? 0),
+      costCount: costEntrySum._count + directPayableSum._count,
+      costAmount: decimalString(costAmount),
       receiptAllocationCount: receiptSum._count,
       receiptAmount: decimalString(receiptSum._sum.amount ?? 0),
       openPayableCount: payableOpen,

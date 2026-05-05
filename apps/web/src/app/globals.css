@@ -139,6 +139,33 @@ label {
   border-color: #43524c;
 }
 
+.nav-group {
+  display: grid;
+  gap: 5px;
+}
+
+.nav-group-button {
+  font-weight: 700;
+}
+
+.sub-nav {
+  border-left: 1px solid #43524c;
+  display: grid;
+  gap: 5px;
+  margin-left: 10px;
+  padding-left: 12px;
+}
+
+.sub-nav button {
+  color: #cad9d4;
+  font-size: 14px;
+  min-height: 36px;
+}
+
+.sub-nav button[data-active="true"] {
+  color: #ffffff;
+}
+
 .session {
   border-top: 1px solid #3c4843;
   display: grid;
@@ -500,6 +527,71 @@ tr[data-selected="true"] {
   padding: 4px 8px;
 }
 
+.status-button {
+  border: 1px solid transparent;
+  color: var(--ink);
+  min-height: 0;
+}
+
+.link-button {
+  background: transparent;
+  border: 0;
+  color: var(--green);
+  min-height: 0;
+  padding: 0;
+}
+
+.attachment-list {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.attachment-row {
+  align-items: center;
+  background: #f7fbf9;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--ink);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  justify-items: start;
+  min-height: 44px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.attachment-row span {
+  overflow-wrap: anywhere;
+}
+
+.attachment-row strong {
+  font-size: 13px;
+}
+
+.attachment-row small {
+  color: var(--muted);
+}
+
+.attachment-preview {
+  border-top: 1px solid var(--line);
+}
+
+.attachment-preview img,
+.attachment-preview iframe {
+  border: 0;
+  display: block;
+  height: min(58vh, 560px);
+  object-fit: contain;
+  width: 100%;
+}
+
+.empty-state {
+  color: var(--muted);
+  padding: 16px;
+}
+
 .modal-backdrop {
   align-items: center;
   background: rgba(24, 32, 29, 0.38);
@@ -681,7 +773,19 @@ tr[data-selected="true"] {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .nav-group {
+    grid-column: 1 / -1;
+  }
+
+  .sub-nav {
+    border-left: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-left: 0;
+    padding-left: 0;
+  }
+
   .nav button {
+    justify-content: center;
     text-align: center;
   }
 
