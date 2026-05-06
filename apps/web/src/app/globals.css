@@ -83,6 +83,17 @@ select {
   width: 100%;
 }
 
+input.month-picker {
+  font-variant-numeric: tabular-nums;
+  min-width: 168px;
+  padding-right: 38px;
+}
+
+input.month-picker::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.8;
+}
+
 input[readonly] {
   background: #f3f7f5;
   color: var(--muted);
@@ -272,7 +283,7 @@ label {
 .toolbar {
   display: grid;
   gap: 8px;
-  grid-template-columns: 128px 84px;
+  grid-template-columns: 176px 84px;
 }
 
 .topbar-actions {

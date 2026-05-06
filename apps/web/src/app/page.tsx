@@ -3275,6 +3275,7 @@ export default function Home() {
             <div className="toolbar">
               <input
                 aria-label="账期"
+                className="month-picker"
                 onChange={(event) => updatePeriodMonth(event.target.value)}
                 type="month"
                 value={periodMonth}
@@ -6315,6 +6316,7 @@ function ReceivableBillingModule({
                 <label>
                   月份
                   <input
+                    className="month-picker"
                     onChange={(event) => setPeriodMonth(event.target.value)}
                     type="month"
                     value={periodMonth}
