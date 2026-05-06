@@ -320,10 +320,16 @@ const authExpiredMessage = "登录已过期，请重新登录。";
 const loginRequiredMessage = "请先登录正式系统。";
 const authSessionCookieName = "erpdog_auth_session";
 const authSessionMaxAgeSeconds = 30 * 24 * 60 * 60;
+const loginCredentialStorageKey = "erpdog_login_credentials";
 
 type AuthSession = {
   accessToken: string;
   user: ApiUser;
+};
+
+type LoginCredentials = {
+  email: string;
+  password: string;
 };
 
 const permissionLabels: Record<string, string> = {
@@ -461,6 +467,51 @@ function clearAuthSessionCookie() {
   }
 
   document.cookie = `${authSessionCookieName}=; Max-Age=0; Path=/; SameSite=Lax`;
+}
+
+function isLoginCredentials(value: unknown): value is LoginCredentials {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<LoginCredentials>;
+  return (
+    typeof candidate.email === "string" &&
+    typeof candidate.password === "string"
+  );
+}
+
+function readLoginCredentials(): LoginCredentials | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(loginCredentialStorageKey);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    return isLoginCredentials(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLoginCredentials(credentials: LoginCredentials) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      loginCredentialStorageKey,
+      JSON.stringify(credentials),
+    );
+  } catch {
+    // 浏览器禁用本地存储时不影响正常登录。
+  }
 }
 
 function translateErrorMessage(message: string) {
@@ -1100,7 +1151,7 @@ export default function Home() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [profits, setProfits] = useState<ProfitRow[]>([]);
-  const [email, setEmail] = useState("admin@erpdog.local");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [periodMonth, setPeriodMonth] = useState("2026-04");
   const [customerCode, setCustomerCode] = useState("");
@@ -1329,6 +1380,12 @@ export default function Home() {
     setPeriodMonth(value);
   }
 
+  function applyRememberedLoginCredentials() {
+    const rememberedCredentials = readLoginCredentials();
+    setEmail(rememberedCredentials?.email ?? "");
+    setPassword(rememberedCredentials?.password ?? "");
+  }
+
   function applyConsoleData(data: ConsoleData) {
     setCustomers(data.customers);
     setSigningEntities(data.signingEntities);
@@ -1401,6 +1458,10 @@ export default function Home() {
   }, [message]);
 
   useEffect(() => {
+    applyRememberedLoginCredentials();
+  }, []);
+
+  useEffect(() => {
     const cachedSession = readAuthSessionCookie();
     if (!cachedSession) {
       return;
@@ -1445,7 +1506,7 @@ export default function Home() {
 
   function logout() {
     resetSession(loginRequiredMessage);
-    setPassword("");
+    applyRememberedLoginCredentials();
     setLoginDialogOpen(false);
   }
 
@@ -1656,6 +1717,13 @@ export default function Home() {
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const loginAccount = email.trim();
+    if (!loginAccount || !password) {
+      setMessage("登录失败：账号和密码不能为空。");
+      setLoginDialogOpen(true);
+      return;
+    }
+
     try {
       const result = await request<{
         accessToken: string;
@@ -1664,17 +1732,18 @@ export default function Home() {
         "/auth/login",
         {
           method: "POST",
-          body: JSON.stringify({ email, password }),
+          body: JSON.stringify({ email: loginAccount, password }),
         },
         { auth: false },
       );
+      writeLoginCredentials({ email: loginAccount, password });
       writeAuthSessionCookie({
         accessToken: result.accessToken,
         user: result.user,
       });
       setToken(result.accessToken);
       setUser(result.user);
-      setPassword("");
+      setEmail(loginAccount);
       setLoginDialogOpen(false);
       setMessage(`已登录：${result.user.name}`);
       try {
