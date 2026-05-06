@@ -85,6 +85,7 @@ const tenantRoleDefinitions = [
     code: ROLE_CODES.OWNER,
     name: "总负责人",
     permissions: [
+      PERMISSION_CODES.DASHBOARD_VIEW,
       PERMISSION_CODES.CUSTOMER_READ_ALL,
       PERMISSION_CODES.CUSTOMER_WRITE,
       PERMISSION_CODES.CONTRACT_WRITE,
@@ -109,6 +110,7 @@ const tenantRoleDefinitions = [
     code: ROLE_CODES.FINANCE,
     name: "财务",
     permissions: [
+      PERMISSION_CODES.DASHBOARD_VIEW,
       PERMISSION_CODES.CUSTOMER_READ_ALL,
       PERMISSION_CODES.BILL_MANAGE,
       PERMISSION_CODES.RECEIVABLE_SETTLE,
@@ -126,6 +128,7 @@ const tenantRoleDefinitions = [
     code: ROLE_CODES.BUSINESS_OWNER,
     name: "业务负责人",
     permissions: [
+      PERMISSION_CODES.DASHBOARD_VIEW,
       PERMISSION_CODES.CUSTOMER_READ_OWN,
       PERMISSION_CODES.CUSTOMER_WRITE,
       PERMISSION_CODES.CONTRACT_WRITE,

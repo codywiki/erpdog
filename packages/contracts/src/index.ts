@@ -9,6 +9,7 @@ export const ROLE_CODES = {
 export type RoleCode = (typeof ROLE_CODES)[keyof typeof ROLE_CODES];
 
 export const PERMISSION_CODES = {
+  DASHBOARD_VIEW: "dashboard.view",
   TENANT_MANAGE: "tenant.manage",
   USER_MANAGE: "user.manage",
   CUSTOMER_READ_ALL: "customer.read_all",

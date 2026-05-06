@@ -6,6 +6,7 @@ import { PERMISSION_CODES, ROLE_CODES } from "@erpdog/contracts";
 const prisma = new PrismaClient();
 
 const permissionNames: Record<string, string> = {
+  [PERMISSION_CODES.DASHBOARD_VIEW]: "经营总览",
   [PERMISSION_CODES.TENANT_MANAGE]: "管理租户和超级管理员",
   [PERMISSION_CODES.USER_MANAGE]: "管理用户和权限",
   [PERMISSION_CODES.CUSTOMER_READ_ALL]: "查看全部客户",
@@ -40,6 +41,7 @@ const roleDefinitions = [
     code: ROLE_CODES.OWNER,
     name: "总负责人",
     permissions: [
+      PERMISSION_CODES.DASHBOARD_VIEW,
       PERMISSION_CODES.CUSTOMER_READ_ALL,
       PERMISSION_CODES.CUSTOMER_WRITE,
       PERMISSION_CODES.CONTRACT_WRITE,
@@ -64,6 +66,7 @@ const roleDefinitions = [
     code: ROLE_CODES.FINANCE,
     name: "财务",
     permissions: [
+      PERMISSION_CODES.DASHBOARD_VIEW,
       PERMISSION_CODES.CUSTOMER_READ_ALL,
       PERMISSION_CODES.BILL_MANAGE,
       PERMISSION_CODES.RECEIVABLE_SETTLE,
@@ -81,6 +84,7 @@ const roleDefinitions = [
     code: ROLE_CODES.BUSINESS_OWNER,
     name: "业务负责人",
     permissions: [
+      PERMISSION_CODES.DASHBOARD_VIEW,
       PERMISSION_CODES.CUSTOMER_READ_OWN,
       PERMISSION_CODES.CUSTOMER_WRITE,
       PERMISSION_CODES.CONTRACT_WRITE,

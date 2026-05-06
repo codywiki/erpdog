@@ -333,6 +333,7 @@ type LoginCredentials = {
 };
 
 const permissionLabels: Record<string, string> = {
+  "dashboard.view": "经营总览",
   "tenant.manage": "租户管理",
   "user.manage": "用户管理",
   "customer.read_all": "查看全部客户",
@@ -1382,16 +1383,31 @@ export default function Home() {
         if (isSuperAdmin) {
           return platformModuleIds.includes(item.id) ? item : null;
         }
-        return platformModuleIds.includes(item.id) ? null : item;
+        if (platformModuleIds.includes(item.id)) {
+          return null;
+        }
+        if (item.id === "dashboard" && !hasPermission("dashboard.view")) {
+          return null;
+        }
+        return item;
       }
       const children = item.children.filter((childId) =>
         isSuperAdmin
           ? platformModuleIds.includes(childId)
-          : !platformModuleIds.includes(childId),
+          : !platformModuleIds.includes(childId) &&
+            (childId !== "dashboard" || hasPermission("dashboard.view")),
       ) as [ModuleId, ...ModuleId[]];
       return children.length > 0 ? { ...item, children } : null;
     })
     .filter((item): item is (typeof navItems)[number] => Boolean(item));
+  const firstVisibleModuleId = visibleNavItems.flatMap((item) =>
+    item.kind === "module" ? [item.id] : item.children,
+  )[0];
+  const activeModuleVisible = visibleNavItems.some((item) =>
+    item.kind === "module"
+      ? item.id === active
+      : item.children.includes(active),
+  );
   const actionBlockReason = (...permissions: string[]) => {
     if (!isLoggedIn) {
       return loginRequiredMessage;
@@ -1524,7 +1540,10 @@ export default function Home() {
     ) {
       setActive("dashboard");
     }
-  }, [active, user]);
+    if (isLoggedIn && !activeModuleVisible && firstVisibleModuleId) {
+      setActive(firstVisibleModuleId);
+    }
+  }, [active, activeModuleVisible, firstVisibleModuleId, isLoggedIn, user]);
 
   function resetSession(message = authExpiredMessage) {
     setToken("");
@@ -3535,7 +3554,7 @@ export default function Home() {
           </div>
         ) : null}
 
-        {active === "dashboard" ? (
+        {active === "dashboard" && hasPermission("dashboard.view") ? (
           <DashboardModule
             bills={bills}
             contracts={contracts}

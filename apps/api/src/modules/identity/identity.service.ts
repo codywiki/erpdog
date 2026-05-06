@@ -64,6 +64,7 @@ const tenantAdminGrantablePermissionCodes: Set<string> = new Set(
 );
 
 const ownerGrantablePermissionCodes: Set<string> = new Set([
+  PERMISSION_CODES.DASHBOARD_VIEW,
   PERMISSION_CODES.CUSTOMER_READ_ALL,
   PERMISSION_CODES.CUSTOMER_READ_OWN,
   PERMISSION_CODES.CUSTOMER_WRITE,
