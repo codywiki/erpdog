@@ -667,14 +667,16 @@ export class FinanceService {
 
   async createPaymentRecipient(user: AuthenticatedUser, rawBody: unknown) {
     const body = bodyObject(rawBody);
+    const platform = this.paymentRecipientPlatform(body);
+    const bankBranch = this.paymentRecipientBankBranch(body, platform);
     const recipient = await this.prisma.paymentRecipient.create({
       data: {
         orgId: user.orgId,
         name: stringField(body, "name"),
-        platform: this.paymentRecipientPlatform(body),
+        platform,
         accountName: stringField(body, "accountName"),
         accountNo: stringField(body, "accountNo"),
-        bankBranch: optionalString(body, "bankBranch"),
+        bankBranch,
       },
     });
 
@@ -702,17 +704,20 @@ export class FinanceService {
   ) {
     const body = bodyObject(rawBody);
     const before = await this.ensurePaymentRecipient(user, id);
+    const platform = this.paymentRecipientPlatform(body, before.platform);
+    const bankBranch = this.paymentRecipientBankBranch(
+      body,
+      platform,
+      before.bankBranch,
+    );
     const updated = await this.prisma.paymentRecipient.update({
       where: { id },
       data: {
         name: optionalString(body, "name") ?? before.name,
-        platform: this.paymentRecipientPlatform(body, before.platform),
+        platform,
         accountName: optionalString(body, "accountName") ?? before.accountName,
         accountNo: optionalString(body, "accountNo") ?? before.accountNo,
-        bankBranch:
-          body.bankBranch === null
-            ? null
-            : (optionalString(body, "bankBranch") ?? before.bankBranch),
+        bankBranch,
       },
     });
 
@@ -2476,6 +2481,35 @@ export class FinanceService {
     }
 
     return value as PaymentRecipientPlatform;
+  }
+
+  private paymentRecipientBankBranch(
+    body: Payload,
+    platform: PaymentRecipientPlatform,
+    fallback?: string | null,
+  ) {
+    if (!this.isBankPaymentRecipientPlatform(platform)) {
+      return null;
+    }
+
+    const bankBranch =
+      body.bankBranch === null
+        ? undefined
+        : (optionalString(body, "bankBranch") ?? fallback ?? undefined);
+    if (!bankBranch) {
+      throw new BadRequestException(
+        "bankBranch is required for bank payment recipient.",
+      );
+    }
+
+    return bankBranch;
+  }
+
+  private isBankPaymentRecipientPlatform(platform: PaymentRecipientPlatform) {
+    return (
+      platform === PaymentRecipientPlatform.PRIVATE_BANK ||
+      platform === PaymentRecipientPlatform.CORPORATE_BANK
+    );
   }
 
   private async ensurePaymentRecipient(user: AuthenticatedUser, id: string) {

@@ -600,6 +600,9 @@ function translateErrorMessage(message: string) {
   if (/Payment recipient not found/i.test(message)) {
     return "请选择有效收款人。";
   }
+  if (/bankBranch is required for bank payment recipient/i.test(message)) {
+    return "对私银行或对公银行收款必须填写银行支行。";
+  }
   if (/Payable must be invoiced or confirmed/i.test(message)) {
     return "应付账单必须先变更为已开票/确认，才能标记已支付。";
   }
@@ -768,6 +771,10 @@ const paymentRecipientPlatformText: Record<PaymentRecipientPlatform, string> = {
   WECHAT: "微信",
   ALIPAY: "支付宝",
 };
+const bankPaymentRecipientPlatforms: PaymentRecipientPlatform[] = [
+  "PRIVATE_BANK",
+  "CORPORATE_BANK",
+];
 
 const ownerDelegatedRoleCodes = ["business_owner", "finance"];
 const tenantAdminDelegatedRoleCodes = ["owner", "business_owner", "finance"];
@@ -1414,6 +1421,8 @@ export default function Home() {
   const selectedPaymentRecipient = paymentRecipients.find(
     (recipient) => recipient.id === selectedPaymentRecipientId,
   );
+  const isBankRecipientPlatform =
+    bankPaymentRecipientPlatforms.includes(recipientPlatform);
   const selectedContract = contracts.find(
     (contract) => contract.id === selectedContractId,
   );
@@ -3210,9 +3219,14 @@ export default function Home() {
     if (
       !recipientName.trim() ||
       !recipientAccountName.trim() ||
-      !recipientAccountNo.trim()
+      !recipientAccountNo.trim() ||
+      (isBankRecipientPlatform && !recipientBankBranch.trim())
     ) {
-      setMessage("保存收款人失败：资源名称、账户名和账号不能为空。");
+      setMessage(
+        isBankRecipientPlatform
+          ? "保存收款人失败：资源名称、账户名、账号和银行支行不能为空。"
+          : "保存收款人失败：资源名称、账户名和账号不能为空。",
+      );
       return;
     }
 
@@ -3232,7 +3246,7 @@ export default function Home() {
               platform: recipientPlatform,
               accountName: recipientAccountName,
               accountNo: recipientAccountNo,
-              bankBranch: recipientBankBranch || null,
+              bankBranch: isBankRecipientPlatform ? recipientBankBranch : null,
             }),
           },
         );
@@ -4002,6 +4016,7 @@ export default function Home() {
             recipientBankBranch={recipientBankBranch}
             recipientDialogOpen={recipientDialogOpen}
             recipientFiles={recipientFiles}
+            recipientIsBankPlatform={isBankRecipientPlatform}
             recipientName={recipientName}
             recipientPlatform={recipientPlatform}
             savePayableStatus={savePayableStatus}
@@ -6999,6 +7014,7 @@ function CostPayableModule({
   recipientBankBranch,
   recipientDialogOpen,
   recipientFiles,
+  recipientIsBankPlatform,
   recipientName,
   recipientPlatform,
   savePayableStatus,
@@ -7064,6 +7080,7 @@ function CostPayableModule({
   recipientBankBranch: string;
   recipientDialogOpen: boolean;
   recipientFiles: File[];
+  recipientIsBankPlatform: boolean;
   recipientName: string;
   recipientPlatform: PaymentRecipientPlatform;
   savePayableStatus: (event: FormEvent<HTMLFormElement>) => void;
@@ -7482,11 +7499,14 @@ function CostPayableModule({
               <label>
                 收款平台
                 <select
-                  onChange={(event) =>
-                    setRecipientPlatform(
-                      event.target.value as PaymentRecipientPlatform,
-                    )
-                  }
+                  onChange={(event) => {
+                    const nextPlatform = event.target
+                      .value as PaymentRecipientPlatform;
+                    if (!bankPaymentRecipientPlatforms.includes(nextPlatform)) {
+                      setRecipientBankBranch("");
+                    }
+                    setRecipientPlatform(nextPlatform);
+                  }}
                   value={recipientPlatform}
                 >
                   {Object.entries(paymentRecipientPlatformText).map(
@@ -7516,15 +7536,17 @@ function CostPayableModule({
                   value={recipientAccountNo}
                 />
               </label>
-              <label>
-                银行支行
-                <input
-                  onChange={(event) =>
-                    setRecipientBankBranch(event.target.value)
-                  }
-                  value={recipientBankBranch}
-                />
-              </label>
+              {recipientIsBankPlatform ? (
+                <label>
+                  银行支行
+                  <input
+                    onChange={(event) =>
+                      setRecipientBankBranch(event.target.value)
+                    }
+                    value={recipientBankBranch}
+                  />
+                </label>
+              ) : null}
               <label>
                 附件
                 <input
