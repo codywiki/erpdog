@@ -1060,12 +1060,6 @@ export class BillingService {
       after: { status: updated.status, receiptAttachmentIds },
     });
 
-    await this.periodLocks.autoCloseIfReady(
-      user.orgId,
-      updated.periodMonth,
-      user.id,
-    );
-
     return this.presentBill(updated);
   }
 

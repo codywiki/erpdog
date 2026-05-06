@@ -552,6 +552,12 @@ label {
   margin: 0;
 }
 
+.danger-text {
+  color: var(--red);
+  line-height: 1.6;
+  margin: 0;
+}
+
 .action-strip {
   display: flex;
   flex-wrap: wrap;

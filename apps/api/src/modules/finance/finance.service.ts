@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import {
+  BillStatus,
   ExtraChargeKind,
   ExtraChargeStatus,
   InvoiceStatus,
@@ -1351,32 +1352,6 @@ export class FinanceService {
       },
     });
 
-    const payableIds = payment.allocations
-      .map((allocation) => allocation.payableId)
-      .filter((id): id is string => Boolean(id));
-    if (payableIds.length) {
-      const affectedPayables = await this.prisma.payable.findMany({
-        where: { orgId: user.orgId, id: { in: payableIds } },
-        select: { periodMonth: true },
-      });
-      const affectedPeriodMonths = Array.from(
-        new Set(
-          affectedPayables
-            .map((payable) => payable.periodMonth)
-            .filter((periodMonth): periodMonth is string =>
-              Boolean(periodMonth),
-            ),
-        ),
-      );
-      for (const affectedPeriodMonth of affectedPeriodMonths) {
-        await this.periodLocks.autoCloseIfReady(
-          user.orgId,
-          affectedPeriodMonth,
-          user.id,
-        );
-      }
-    }
-
     return payment;
   }
 
@@ -1440,6 +1415,27 @@ export class FinanceService {
     return updated;
   }
 
+  async periodStatus(user: AuthenticatedUser, periodMonth: string) {
+    parsePeriodMonth(periodMonth);
+    const period = await this.prisma.billingPeriod.findUnique({
+      where: { orgId_periodMonth: { orgId: user.orgId, periodMonth } },
+    });
+
+    return (
+      period ?? {
+        id: null,
+        orgId: user.orgId,
+        periodMonth,
+        status: PeriodClosingStatus.OPEN,
+        closedAt: null,
+        reopenedAt: null,
+        reason: null,
+        createdAt: null,
+        updatedAt: null,
+      }
+    );
+  }
+
   async closePeriod(
     user: AuthenticatedUser,
     periodMonth: string,
@@ -1447,55 +1443,75 @@ export class FinanceService {
   ) {
     const body = bodyObject(rawBody);
     parsePeriodMonth(periodMonth);
-    const openBills = await this.prisma.bill.count({
+    const currentPeriod = await this.prisma.billingPeriod.findUnique({
+      where: { orgId_periodMonth: { orgId: user.orgId, periodMonth } },
+      select: { status: true },
+    });
+    if (currentPeriod?.status === PeriodClosingStatus.CLOSED) {
+      throw new ConflictException("Period is already closed.");
+    }
+
+    const billCounts = await this.prisma.bill.groupBy({
+      by: ["status"],
       where: {
         orgId: user.orgId,
         periodMonth,
-        status: {
-          in: [
-            "DRAFT",
-            "PENDING_APPROVAL",
-            "PENDING_SETTLEMENT",
-            "INVOICED",
-            "INTERNAL_REVIEW",
-            "FINANCE_REVIEW",
-            "CUSTOMER_PENDING",
-          ],
-        },
+        status: { notIn: [BillStatus.CLOSED, BillStatus.VOIDED] },
       },
+      _count: { _all: true },
     });
-    if (openBills > 0) {
+    const activeBillCount = billCounts.reduce(
+      (total, item) => total + item._count._all,
+      0,
+    );
+    const receivedBillCount =
+      billCounts.find((item) => item.status === BillStatus.RECEIVED)?._count
+        ._all ?? 0;
+    if (activeBillCount === 0 || receivedBillCount !== activeBillCount) {
       throw new ConflictException(
-        "There are unconfirmed bills in this period.",
+        "All receivable bills in this period must be received before closing.",
       );
     }
-    const [draftExtraCharges, pendingPaymentRequests] = await Promise.all([
-      this.prisma.extraCharge.count({
-        where: {
-          orgId: user.orgId,
-          periodMonth,
-          status: ExtraChargeStatus.DRAFT,
-        },
-      }),
-      this.prisma.paymentRequest.count({
-        where: {
-          orgId: user.orgId,
-          status: {
-            in: [
-              PaymentRequestStatus.DRAFT,
-              PaymentRequestStatus.SUBMITTED,
-              PaymentRequestStatus.APPROVED,
-              PaymentRequestStatus.PARTIALLY_PAID,
+    const [openPayables, draftExtraCharges, pendingPaymentRequests] =
+      await Promise.all([
+        this.prisma.payable.count({
+          where: {
+            orgId: user.orgId,
+            periodMonth,
+            status: { notIn: [PayableStatus.PAID, PayableStatus.VOIDED] },
+          },
+        }),
+        this.prisma.extraCharge.count({
+          where: {
+            orgId: user.orgId,
+            periodMonth,
+            status: ExtraChargeStatus.DRAFT,
+          },
+        }),
+        this.prisma.paymentRequest.count({
+          where: {
+            orgId: user.orgId,
+            status: {
+              in: [
+                PaymentRequestStatus.DRAFT,
+                PaymentRequestStatus.SUBMITTED,
+                PaymentRequestStatus.APPROVED,
+                PaymentRequestStatus.PARTIALLY_PAID,
+              ],
+            },
+            OR: [
+              { periodMonth },
+              { items: { some: { periodMonth } } },
+              { items: { some: { payable: { periodMonth } } } },
             ],
           },
-          OR: [
-            { periodMonth },
-            { items: { some: { periodMonth } } },
-            { items: { some: { payable: { periodMonth } } } },
-          ],
-        },
-      }),
-    ]);
+        }),
+      ]);
+    if (openPayables > 0) {
+      throw new ConflictException(
+        "All payables in this period must be paid before closing.",
+      );
+    }
     if (draftExtraCharges > 0) {
       throw new ConflictException(
         "There are draft extra charges not included in bills.",

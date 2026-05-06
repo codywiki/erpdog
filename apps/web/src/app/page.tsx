@@ -288,6 +288,15 @@ type ProfitRow = {
   grossMargin: string | null;
 };
 
+type BillingPeriod = {
+  id?: string | null;
+  periodMonth: string;
+  status: "OPEN" | "CLOSED" | "REOPENED" | string;
+  closedAt?: string | null;
+  reopenedAt?: string | null;
+  reason?: string | null;
+};
+
 type ConsoleData = {
   customers: Customer[];
   signingEntities: SigningEntity[];
@@ -305,6 +314,7 @@ type ConsoleData = {
   tenants: Tenant[];
   roles: Role[];
   auditLogs: AuditLog[];
+  billingPeriod: BillingPeriod | null;
   profits: ProfitRow[];
 };
 
@@ -350,6 +360,7 @@ const permissionLabels: Record<string, string> = {
   "payment_request.create": "发起付款申请",
   "payment_request.approve": "审批付款申请",
   "payment.pay": "登记付款",
+  "period.close": "确认结账",
   "report.view": "查看报表",
   "audit.view": "查看审计",
 };
@@ -652,6 +663,15 @@ function translateErrorMessage(message: string) {
   if (/must be a valid date/i.test(message)) {
     return "日期格式不正确。";
   }
+  if (/All receivable bills in this period must be received/i.test(message)) {
+    return "当前账期的应收账单必须全部已到账后才能结账。";
+  }
+  if (/All payables in this period must be paid/i.test(message)) {
+    return "当前账期的成本应付必须全部已支付后才能结账。";
+  }
+  if (/Period is already closed|Period .* is closed/i.test(message)) {
+    return "当前账期已关闭。";
+  }
 
   return message;
 }
@@ -745,6 +765,10 @@ const paymentRecipientPlatformText: Record<PaymentRecipientPlatform, string> = {
 const ownerDelegatedRoleCodes = ["business_owner", "finance"];
 const tenantAdminDelegatedRoleCodes = ["owner", "business_owner", "finance"];
 const platformModuleIds: ModuleId[] = ["superAdmins", "tenants"];
+const modulePermissionRequirements: Partial<Record<ModuleId, string[]>> = {
+  dashboard: ["dashboard.view"],
+  identity: ["user.manage"],
+};
 const roleCodeText: Record<string, string> = {
   super_admin: "超级管理员",
   admin: "租户管理员",
@@ -798,6 +822,7 @@ function emptyConsoleData(): ConsoleData {
     tenants: [],
     roles: [],
     auditLogs: [],
+    billingPeriod: null,
     profits: [],
   };
 }
@@ -933,6 +958,59 @@ function nextPayableStatus(status: string) {
     return "PAID";
   }
   return "";
+}
+
+function periodClosingReadiness(
+  bills: Bill[],
+  payables: Payable[],
+  periodMonth: string,
+  billingPeriod?: BillingPeriod | null,
+) {
+  const periodBills = bills.filter(
+    (bill) =>
+      bill.periodMonth === periodMonth &&
+      !["CLOSED", "VOIDED"].includes(bill.status),
+  );
+  const receivedBillCount = periodBills.filter(
+    (bill) => bill.status === "RECEIVED",
+  ).length;
+  const periodPayables = payables.filter(
+    (payable) =>
+      (payable.periodMonth ?? payable.bill?.periodMonth) === periodMonth &&
+      payable.status !== "VOIDED",
+  );
+  const openPayableCount = periodPayables.filter(
+    (payable) => payable.status !== "PAID",
+  ).length;
+  const openBillCount = periodBills.length - receivedBillCount;
+  const isClosed = billingPeriod?.status === "CLOSED";
+  const canClose =
+    !isClosed &&
+    periodBills.length > 0 &&
+    openBillCount === 0 &&
+    openPayableCount === 0;
+
+  let reason = "应收已到账，关联成本应付已支付，可以人工确认关闭账期。";
+  if (isClosed) {
+    reason = "当前账期已关闭，客户利润已刷新。";
+  } else if (periodBills.length === 0) {
+    reason = "当前账期没有应收账单，暂不需要结账。";
+  } else if (openBillCount > 0) {
+    reason = `还有 ${openBillCount} 张应收账单未到账。`;
+  } else if (openPayableCount > 0) {
+    reason = `还有 ${openPayableCount} 条成本应付未支付。`;
+  }
+
+  return {
+    canClose,
+    isClosed,
+    openBillCount,
+    openPayableCount,
+    periodBillCount: periodBills.length,
+    periodPayableCount: periodPayables.length,
+    receivedBillCount,
+    reason,
+  };
 }
 
 function paymentRecipientAccountText(recipient?: PaymentRecipient | null) {
@@ -1182,6 +1260,9 @@ export default function Home() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod | null>(
+    null,
+  );
   const [profits, setProfits] = useState<ProfitRow[]>([]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1369,6 +1450,10 @@ export default function Home() {
       ) ?? false
     );
   };
+  const canViewModule = (moduleId: ModuleId) => {
+    const requirements = modulePermissionRequirements[moduleId] ?? [];
+    return hasPermission(...requirements);
+  };
   const tenantRoleOptions = roles.filter((role) =>
     tenantAdminDelegatedRoleCodes.includes(role.code),
   );
@@ -1377,6 +1462,12 @@ export default function Home() {
     creatableRoleCodes.includes(role.code),
   );
   const currentMessageTone = messageTone(message);
+  const closingReadiness = periodClosingReadiness(
+    bills,
+    payables,
+    periodMonth,
+    billingPeriod,
+  );
   const visibleNavItems = navItems
     .map((item) => {
       if (item.kind === "module") {
@@ -1386,7 +1477,7 @@ export default function Home() {
         if (platformModuleIds.includes(item.id)) {
           return null;
         }
-        if (item.id === "dashboard" && !hasPermission("dashboard.view")) {
+        if (!canViewModule(item.id)) {
           return null;
         }
         return item;
@@ -1394,8 +1485,7 @@ export default function Home() {
       const children = item.children.filter((childId) =>
         isSuperAdmin
           ? platformModuleIds.includes(childId)
-          : !platformModuleIds.includes(childId) &&
-            (childId !== "dashboard" || hasPermission("dashboard.view")),
+          : !platformModuleIds.includes(childId) && canViewModule(childId),
       ) as [ModuleId, ...ModuleId[]];
       return children.length > 0 ? { ...item, children } : null;
     })
@@ -1450,6 +1540,7 @@ export default function Home() {
     setTenants(data.tenants);
     setRoles(data.roles);
     setAuditLogs(data.auditLogs);
+    setBillingPeriod(data.billingPeriod);
     setProfits(data.profits);
     setSelectedCustomerId((current) =>
       data.customers.some((customer) => customer.id === current)
@@ -1653,6 +1744,7 @@ export default function Home() {
       nextSuperAdmins,
       nextTenants,
       nextAuditLogs,
+      nextBillingPeriod,
       nextProfits,
     ] = await Promise.all([
       fetchIf<Customer[] | PaginatedResponse<Customer>>(
@@ -1737,6 +1829,11 @@ export default function Home() {
         "/audit-logs?pageSize=30",
         emptyPage<AuditLog>(),
       ),
+      fetchIf<BillingPeriod | null>(
+        can("period.close", "report.view"),
+        `/periods/${periodMonth}`,
+        null,
+      ),
       fetchIf<ProfitRow[]>(
         can("report.view"),
         `/reports/customer-profit?periodMonth=${periodMonth}`,
@@ -1761,6 +1858,7 @@ export default function Home() {
       superAdmins: listItems(nextSuperAdmins),
       tenants: listItems(nextTenants),
       auditLogs: listItems(nextAuditLogs),
+      billingPeriod: nextBillingPeriod,
       profits: nextProfits,
     });
     setMessage("正式数据已刷新");
@@ -3279,6 +3377,28 @@ export default function Home() {
     );
   }
 
+  function confirmPeriodClose() {
+    const readiness = periodClosingReadiness(
+      bills,
+      payables,
+      periodMonth,
+      billingPeriod,
+    );
+    if (!readiness.canClose) {
+      setMessage(`确认结账失败：${readiness.reason}`);
+      return;
+    }
+
+    void submitAction("确认结账", ["period.close"], () =>
+      request(`/periods/${periodMonth}/close`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: "人工确认应收已到账且关联成本应付已支付，关闭账期。",
+        }),
+      }),
+    );
+  }
+
   async function loadPayableAttachments(payable: Payable) {
     try {
       const page = await request<PaginatedResponse<Attachment>>(
@@ -3572,7 +3692,7 @@ export default function Home() {
           <ActivationModule apiBase={apiBase} />
         ) : null}
 
-        {active === "identity" ? (
+        {active === "identity" && hasPermission("user.manage") ? (
           <IdentityModule
             auditLogs={auditLogs}
             closeUserDialog={closeUserDialog}
@@ -3898,7 +4018,13 @@ export default function Home() {
         ) : null}
 
         {active === "closing" ? (
-          <ClosingModule periodMonth={periodMonth} profits={profits} />
+          <ClosingModule
+            disabledReason={actionBlockReason("period.close")}
+            onConfirmClose={confirmPeriodClose}
+            periodMonth={periodMonth}
+            profits={profits}
+            readiness={closingReadiness}
+          />
         ) : null}
       </main>
     </div>
@@ -5088,6 +5214,10 @@ function IdentityModule({
   const canEditRole = (role: Role) =>
     (isAdmin && tenantAdminDelegatedRoleCodes.includes(role.code)) ||
     (isOwner && ownerDelegatedRoleCodes.includes(role.code));
+  const canGrantPermissionToRole = (role: Role, permissionCode: string) =>
+    permissionCode !== "user.manage" ||
+    role.code === "admin" ||
+    role.code === "owner";
   const canEditUser = (item: ConsoleUser) =>
     item.id === currentUserId ||
     (isAdmin &&
@@ -5303,7 +5433,10 @@ function IdentityModule({
                         <label key={permission.code}>
                           <input
                             checked={checked}
-                            disabled={!canEditRole(role)}
+                            disabled={
+                              !canEditRole(role) ||
+                              !canGrantPermissionToRole(role, permission.code)
+                            }
                             onChange={(event) =>
                               updateRolePermission(
                                 role,
@@ -6259,23 +6392,55 @@ function ContractsModule({
 }
 
 function ClosingModule({
+  disabledReason,
+  onConfirmClose,
   periodMonth,
   profits,
+  readiness,
 }: {
+  disabledReason: string;
+  onConfirmClose: () => void;
   periodMonth: string;
   profits: ProfitRow[];
+  readiness: ReturnType<typeof periodClosingReadiness>;
 }) {
   return (
     <section className="workspace closing-layout">
       <div className="panel">
         <div className="panel-header">
-          <h2>自动结账</h2>
+          <h2>人工确认结账</h2>
           <span>{periodMonth}</span>
         </div>
         <div className="module-form">
           <p className="helper-text">
-            当应收账单已到账，且该账期关联成本应付均已支付后，系统会自动关闭账期并刷新客户利润。
+            当应收账单全部已到账，且该账期关联成本应付均已支付后，页面会出现确认按钮。未确认前账期保持开启，可以继续新增应收账单和成本应付。
           </p>
+          <div className="business-number-grid">
+            <div className="field-block">
+              <span>应收账单</span>
+              <strong>
+                {readiness.receivedBillCount} / {readiness.periodBillCount}
+              </strong>
+            </div>
+            <div className="field-block">
+              <span>未支付应付</span>
+              <strong>{readiness.openPayableCount}</strong>
+            </div>
+          </div>
+          <p className={readiness.canClose ? "helper-text" : "danger-text"}>
+            {readiness.reason}
+          </p>
+          {readiness.canClose ? (
+            <button
+              className="primary"
+              disabled={Boolean(disabledReason)}
+              onClick={onConfirmClose}
+              title={disabledReason || undefined}
+              type="button"
+            >
+              确认结账并刷新利润
+            </button>
+          ) : null}
         </div>
       </div>
 
