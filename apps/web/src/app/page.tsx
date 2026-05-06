@@ -826,6 +826,12 @@ function billProjectName(bill: Bill) {
   );
 }
 
+function billOptionLabel(bill: Bill) {
+  return `${bill.billNo} · ${bill.customer?.name ?? "-"} · ${billProjectName(
+    bill,
+  )}`;
+}
+
 function billAttachmentIds(bill: Bill) {
   return Array.from(
     new Set([
@@ -7021,7 +7027,7 @@ function CostPayableModule({
                   <option value="">选择账单</option>
                   {bills.map((bill) => (
                     <option key={bill.id} value={bill.id}>
-                      {bill.billNo} · {bill.customer?.name ?? "-"}
+                      {billOptionLabel(bill)}
                     </option>
                   ))}
                 </select>
