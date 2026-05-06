@@ -1744,7 +1744,11 @@ export class FinanceService {
     };
   }
 
-  async attachmentDownloadUrl(user: AuthenticatedUser, id: string) {
+  async attachmentDownloadUrl(
+    user: AuthenticatedUser,
+    id: string,
+    disposition?: string,
+  ) {
     const attachment = await this.prisma.attachment.findFirst({
       where: { id, orgId: user.orgId },
     });
@@ -1763,11 +1767,15 @@ export class FinanceService {
       };
     }
 
+    const downloadDisposition =
+      disposition === "inline" ? "inline" : "attachment";
+
     return {
       attachment: this.presentAttachment(attachment),
       download: await this.storage.createPresignedDownload(
         attachment.storageKey,
         attachment.fileName,
+        downloadDisposition,
       ),
     };
   }

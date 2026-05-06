@@ -372,8 +372,9 @@ export class FinanceController {
   attachmentDownloadUrl(
     @CurrentUser() user: AuthenticatedUser,
     @Param("id") id: string,
+    @Query("disposition") disposition?: string,
   ) {
-    return this.finance.attachmentDownloadUrl(user, id);
+    return this.finance.attachmentDownloadUrl(user, id, disposition);
   }
 
   @Post("attachments/presign-upload")

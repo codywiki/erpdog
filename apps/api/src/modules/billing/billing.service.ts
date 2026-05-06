@@ -729,18 +729,15 @@ export class BillingService {
     const evidenceAttachmentIds = uploadedAttachmentIds.length
       ? uploadedAttachmentIds
       : this.jsonStringArray(bill.evidenceAttachmentIds);
-    if (!evidenceAttachmentIds.length) {
-      throw new BadRequestException(
-        "Evidence attachments are required before approval.",
+    if (evidenceAttachmentIds.length > 0) {
+      await this.ensureBillAttachments(
+        this.prisma,
+        user.orgId,
+        billId,
+        evidenceAttachmentIds,
+        "evidenceAttachmentIds",
       );
     }
-    await this.ensureBillAttachments(
-      this.prisma,
-      user.orgId,
-      billId,
-      evidenceAttachmentIds,
-      "evidenceAttachmentIds",
-    );
     await this.periodLocks.ensureOpen(user.orgId, bill.periodMonth);
     this.ensureTransitionAllowed(bill.status, BillStatus.PENDING_SETTLEMENT);
 

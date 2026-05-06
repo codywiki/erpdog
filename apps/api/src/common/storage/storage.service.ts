@@ -51,6 +51,8 @@ export type PresignedDownloadResponse = {
   expiresIn: number;
 };
 
+export type PresignedDownloadDisposition = "attachment" | "inline";
+
 @Injectable()
 export class StorageService {
   private client?: S3Client;
@@ -91,12 +93,13 @@ export class StorageService {
   async createPresignedDownload(
     storageKey: string,
     fileName: string,
+    disposition: PresignedDownloadDisposition = "attachment",
   ): Promise<PresignedDownloadResponse> {
     await this.ensureBucket();
     const command = new GetObjectCommand({
       Bucket: this.bucket(),
       Key: storageKey,
-      ResponseContentDisposition: `attachment; filename="${this.asciiFileName(fileName)}"`,
+      ResponseContentDisposition: `${disposition}; filename="${this.asciiFileName(fileName)}"`,
     });
 
     return {

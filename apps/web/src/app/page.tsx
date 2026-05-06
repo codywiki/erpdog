@@ -42,6 +42,12 @@ type Attachment = ContractAttachment & {
   ownerId?: string | null;
 };
 
+type AttachmentPreview = {
+  attachment: Attachment;
+  url: string;
+  downloadUrl: string;
+};
+
 type ContractTierRule = {
   description?: string;
   threshold?: string;
@@ -1125,10 +1131,8 @@ export default function Home() {
   const [billAttachmentsDialogOpen, setBillAttachmentsDialogOpen] =
     useState(false);
   const [billAttachments, setBillAttachments] = useState<Attachment[]>([]);
-  const [attachmentPreview, setAttachmentPreview] = useState<{
-    attachment: Attachment;
-    url: string;
-  } | null>(null);
+  const [attachmentPreview, setAttachmentPreview] =
+    useState<AttachmentPreview | null>(null);
   const [payableDialogOpen, setPayableDialogOpen] = useState(false);
   const [selectedPayableId, setSelectedPayableId] = useState("");
   const [selectedPaymentRecipientId, setSelectedPaymentRecipientId] =
@@ -2746,7 +2750,8 @@ export default function Home() {
       setMessage("修改账单状态失败：状态必须按顺序逐级修改。");
       return;
     }
-    if (billStatusFiles.length === 0) {
+    const statusAttachmentRequired = billStatusTarget !== "PENDING_SETTLEMENT";
+    if (statusAttachmentRequired && billStatusFiles.length === 0) {
       setMessage("修改账单状态失败：请上传本次状态变更对应的附件。");
       return;
     }
@@ -2757,16 +2762,17 @@ export default function Home() {
         ? ["bill.approve"]
         : ["receivable.settle"];
     void submitAction(label, permissions, async () => {
-      const attachmentIds = await uploadAttachments(
-        "bill",
-        selectedBill.id,
-        billStatusFiles,
-      );
+      const attachmentIds =
+        billStatusFiles.length > 0
+          ? await uploadAttachments("bill", selectedBill.id, billStatusFiles)
+          : [];
       let result: unknown;
       if (billStatusTarget === "PENDING_SETTLEMENT") {
         result = await request(`/bills/${selectedBill.id}/approve`, {
           method: "POST",
-          body: JSON.stringify({ attachmentIds }),
+          body: JSON.stringify(
+            attachmentIds.length > 0 ? { attachmentIds } : {},
+          ),
         });
       } else if (billStatusTarget === "INVOICED") {
         result = await request(`/bills/${selectedBill.id}/mark-invoiced`, {
@@ -2820,13 +2826,20 @@ export default function Home() {
 
   async function openAttachmentPreview(attachment: Attachment) {
     try {
-      const result = await request<{
-        attachment: Attachment;
-        download: { url: string };
-      }>(`/attachments/${attachment.id}/download-url`);
+      const [previewResult, downloadResult] = await Promise.all([
+        request<{
+          attachment: Attachment;
+          download: { url: string };
+        }>(`/attachments/${attachment.id}/download-url?disposition=inline`),
+        request<{
+          attachment: Attachment;
+          download: { url: string };
+        }>(`/attachments/${attachment.id}/download-url`),
+      ]);
       setAttachmentPreview({
-        attachment: result.attachment,
-        url: result.download.url,
+        attachment: previewResult.attachment,
+        downloadUrl: downloadResult.download.url,
+        url: previewResult.download.url,
       });
     } catch (error) {
       setMessage(
@@ -5595,7 +5608,7 @@ function ContractsModule({
   signingEntities,
   updateContractFiles,
 }: {
-  attachmentPreview: { attachment: Attachment; url: string } | null;
+  attachmentPreview: AttachmentPreview | null;
   closeContractDialog: () => void;
   closeContractDetail: () => void;
   contractCode: string;
@@ -6029,7 +6042,7 @@ function ContractsModule({
                 <div className="panel-header">
                   <h2>{attachmentPreview.attachment.fileName}</h2>
                   <a
-                    href={attachmentPreview.url}
+                    href={attachmentPreview.downloadUrl}
                     rel="noreferrer"
                     target="_blank"
                   >
@@ -6051,7 +6064,9 @@ function ContractsModule({
                     />
                   )
                 ) : (
-                  <div className="empty-state">该附件请下载查看</div>
+                  <div className="empty-state">
+                    该附件暂不支持在线预览，请点击下载查看
+                  </div>
                 )}
               </div>
             ) : null}
@@ -6129,7 +6144,7 @@ function ReceivableBillingModule({
   setSelectedCustomerId,
   statusDisabledReason,
 }: {
-  attachmentPreview: { attachment: Attachment; url: string } | null;
+  attachmentPreview: AttachmentPreview | null;
   billAttachments: Attachment[];
   billAttachmentsDialogOpen: boolean;
   billDialogOpen: boolean;
@@ -6185,6 +6200,8 @@ function ReceivableBillingModule({
   const nextStatus = selectedBill
     ? nextReceivableStatus(selectedBill.status)
     : "";
+  const billStatusAttachmentRequired =
+    billStatusTarget !== "PENDING_SETTLEMENT";
 
   return (
     <section className="workspace billing-layout">
@@ -6392,7 +6409,7 @@ function ReceivableBillingModule({
                 </label>
               ) : null}
               <label>
-                状态附件
+                {billStatusAttachmentRequired ? "状态附件" : "状态附件（可选）"}
                 <input
                   accept="application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg"
                   multiple
@@ -6402,7 +6419,9 @@ function ReceivableBillingModule({
               </label>
               <small className="file-list">
                 {billStatusFiles.map((file) => file.name).join("、") ||
-                  "未选择状态附件"}
+                  (billStatusAttachmentRequired
+                    ? "未选择状态附件"
+                    : "当前步骤可不上传附件")}
               </small>
               {statusDisabledReason ? (
                 <small className="form-note">{statusDisabledReason}</small>
@@ -6471,7 +6490,7 @@ function ReceivableBillingModule({
                 <div className="panel-header">
                   <h2>{attachmentPreview.attachment.fileName}</h2>
                   <a
-                    href={attachmentPreview.url}
+                    href={attachmentPreview.downloadUrl}
                     rel="noreferrer"
                     target="_blank"
                   >
@@ -6493,7 +6512,9 @@ function ReceivableBillingModule({
                     />
                   )
                 ) : (
-                  <div className="empty-state">该附件请下载查看</div>
+                  <div className="empty-state">
+                    该附件暂不支持在线预览，请点击下载查看
+                  </div>
                 )}
               </div>
             ) : null}
@@ -6570,7 +6591,7 @@ function CostPayableModule({
   setSelectedPaymentRecipientId,
   statusDisabledReason,
 }: {
-  attachmentPreview: { attachment: Attachment; url: string } | null;
+  attachmentPreview: AttachmentPreview | null;
   bills: Bill[];
   closePayableAttachmentsDialog: () => void;
   closePayableDialog: () => void;
@@ -7257,7 +7278,7 @@ function CostPayableModule({
                 <div className="panel-header">
                   <h2>{attachmentPreview.attachment.fileName}</h2>
                   <a
-                    href={attachmentPreview.url}
+                    href={attachmentPreview.downloadUrl}
                     rel="noreferrer"
                     target="_blank"
                   >
@@ -7279,7 +7300,9 @@ function CostPayableModule({
                     />
                   )
                 ) : (
-                  <div className="empty-state">该附件请下载查看</div>
+                  <div className="empty-state">
+                    该附件暂不支持在线预览，请点击下载查看
+                  </div>
                 )}
               </div>
             ) : null}
@@ -7344,7 +7367,7 @@ function CostPayableModule({
                 <div className="panel-header">
                   <h2>{attachmentPreview.attachment.fileName}</h2>
                   <a
-                    href={attachmentPreview.url}
+                    href={attachmentPreview.downloadUrl}
                     rel="noreferrer"
                     target="_blank"
                   >
@@ -7366,7 +7389,9 @@ function CostPayableModule({
                     />
                   )
                 ) : (
-                  <div className="empty-state">该附件请下载查看</div>
+                  <div className="empty-state">
+                    该附件暂不支持在线预览，请点击下载查看
+                  </div>
                 )}
               </div>
             ) : null}
