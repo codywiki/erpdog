@@ -173,6 +173,7 @@ export class BillingService {
               orgId: user.orgId,
               customerId: contract.customerId,
               contractId: contract.id,
+              signingEntityId: contract.signingEntityId,
               billNo: `BILL-${periodMonth}-${contract.code}`,
               periodMonth,
               subtotal,
@@ -377,6 +378,7 @@ export class BillingService {
     const customerId = stringField(body, "customerId");
     const contractId = stringField(body, "contractId");
     const periodMonth = stringField(body, "periodMonth");
+    const requestedSigningEntityId = optionalString(body, "signingEntityId");
     await this.customers.ensureCustomerAccess(user, customerId);
     await this.periodLocks.ensureOpen(user.orgId, periodMonth);
 
@@ -385,11 +387,25 @@ export class BillingService {
       select: {
         id: true,
         code: true,
+        signingEntityId: true,
         serviceFeeRate: true,
       },
     });
     if (!contract) {
       throw new NotFoundException("Contract not found for customer.");
+    }
+
+    const signingEntityId =
+      requestedSigningEntityId ?? contract.signingEntityId;
+    if (!signingEntityId) {
+      throw new BadRequestException("signingEntityId is required.");
+    }
+    const signingEntity = await this.prisma.signingEntity.findFirst({
+      where: { id: signingEntityId, orgId: user.orgId },
+      select: { id: true },
+    });
+    if (!signingEntity) {
+      throw new NotFoundException("Signing entity not found.");
     }
 
     const serviceFeeRate = new Prisma.Decimal(contract.serviceFeeRate ?? 0);
@@ -398,7 +414,9 @@ export class BillingService {
       return this.createFlatReceivableBill(user, {
         customerId,
         contractId,
+        signingEntityId,
         periodMonth,
+        projectName: stringField(body, "projectName"),
         totalAmount: positiveMoney(body.totalAmount, "totalAmount"),
         dueDate: optionalDate(body, "dueDate"),
         billNo: optionalString(body, "billNo"),
@@ -468,6 +486,7 @@ export class BillingService {
             orgId: user.orgId,
             customerId,
             contractId,
+            signingEntityId,
             billNo:
               optionalString(body, "billNo") ??
               `AR-${periodMonth}-${Date.now().toString(36).toUpperCase()}`,
@@ -552,7 +571,9 @@ export class BillingService {
     input: {
       customerId: string;
       contractId: string;
+      signingEntityId: string;
       periodMonth: string;
+      projectName: string;
       totalAmount: Prisma.Decimal;
       dueDate?: Date;
       billNo?: string;
@@ -565,6 +586,7 @@ export class BillingService {
             orgId: user.orgId,
             customerId: input.customerId,
             contractId: input.contractId,
+            signingEntityId: input.signingEntityId,
             billNo:
               input.billNo ??
               `AR-${input.periodMonth}-${Date.now().toString(36).toUpperCase()}`,
@@ -574,6 +596,15 @@ export class BillingService {
             dueDate: input.dueDate,
             subtotal: input.totalAmount,
             totalAmount: input.totalAmount,
+            items: {
+              create: {
+                sourceType: ChargeSourceType.MANUAL,
+                name: input.projectName,
+                amount: input.totalAmount,
+                quantity: new Prisma.Decimal(1),
+                lineTotal: input.totalAmount,
+              },
+            },
             statusEvents: {
               create: {
                 toStatus: BillStatus.PENDING_APPROVAL,
@@ -1203,6 +1234,7 @@ export class BillingService {
 
     return {
       ...bill,
+      projectName: this.billProjectName(bill),
       totalAmount: decimalString(total),
       subtotal: decimalString(bill.subtotal),
       adjustmentTotal: decimalString(bill.adjustmentTotal),
@@ -1257,6 +1289,7 @@ export class BillingService {
 
     return {
       ...bill,
+      projectName: this.billProjectName(bill),
       totalAmount: decimalString(total),
       subtotal: decimalString(bill.subtotal),
       adjustmentTotal: decimalString(bill.adjustmentTotal),
@@ -1280,16 +1313,48 @@ export class BillingService {
     };
   }
 
+  private billProjectName(bill: {
+    items?: Array<{ name: string }>;
+    settlements?: Array<{ items: Array<{ projectName: string }> }>;
+    contract?: { name?: string | null } | null;
+  }) {
+    const itemName = bill.items?.map((item) => item.name.trim()).find(Boolean);
+    if (itemName) {
+      return itemName;
+    }
+
+    const settlementProjectName = bill.settlements
+      ?.flatMap((settlement) => settlement.items)
+      .map((item) => item.projectName.trim())
+      .find(Boolean);
+    if (settlementProjectName) {
+      return settlementProjectName;
+    }
+
+    return bill.contract?.name?.trim() || "";
+  }
+
   private billSummaryInclude() {
     return {
       customer: {
         select: { id: true, code: true, name: true, fullName: true },
+      },
+      signingEntity: {
+        select: {
+          id: true,
+          code: true,
+          shortName: true,
+          fullName: true,
+          legalRepresentative: true,
+          taxpayerType: true,
+        },
       },
       contract: {
         select: {
           id: true,
           code: true,
           name: true,
+          signingEntityId: true,
           signingEntity: {
             select: {
               id: true,
@@ -1302,6 +1367,12 @@ export class BillingService {
           },
         },
       },
+      items: { orderBy: { createdAt: "asc" }, take: 1 },
+      settlements: {
+        orderBy: { sortOrder: "asc" },
+        take: 1,
+        include: { items: { orderBy: { createdAt: "asc" }, take: 1 } },
+      },
       invoiceAllocations: { include: { invoice: true } },
       receiptAllocations: { include: { receipt: true } },
     } satisfies Prisma.BillInclude;
@@ -1312,11 +1383,22 @@ export class BillingService {
       customer: {
         select: { id: true, code: true, name: true, fullName: true },
       },
+      signingEntity: {
+        select: {
+          id: true,
+          code: true,
+          shortName: true,
+          fullName: true,
+          legalRepresentative: true,
+          taxpayerType: true,
+        },
+      },
       contract: {
         select: {
           id: true,
           code: true,
           name: true,
+          signingEntityId: true,
           signingEntity: {
             select: {
               id: true,

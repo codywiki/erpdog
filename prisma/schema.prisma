@@ -402,6 +402,7 @@ model SigningEntity {
 
   org       Organization @relation(fields: [orgId], references: [id], onDelete: Restrict)
   contracts Contract[]
+  bills     Bill[]
 
   @@unique([orgId, code])
   @@unique([orgId, fullName])
@@ -558,6 +559,7 @@ model Bill {
   orgId                 String     @map("org_id")
   customerId            String     @map("customer_id")
   contractId            String?    @map("contract_id")
+  signingEntityId       String?    @map("signing_entity_id")
   billNo                String     @map("bill_no")
   periodMonth           String     @map("period_month")
   status                BillStatus @default(DRAFT)
@@ -581,6 +583,7 @@ model Bill {
   org                Organization        @relation(fields: [orgId], references: [id], onDelete: Restrict)
   customer           Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
   contract           Contract?           @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  signingEntity      SigningEntity?      @relation(fields: [signingEntityId], references: [id], onDelete: SetNull)
   items              BillItem[]
   settlements        BillSettlement[]
   confirmations      BillConfirmation[]
@@ -594,6 +597,7 @@ model Bill {
   @@unique([orgId, contractId, periodMonth])
   @@index([orgId, periodMonth])
   @@index([customerId, periodMonth])
+  @@index([signingEntityId])
   @@index([status, periodMonth])
   @@map("bills")
 }

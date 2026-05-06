@@ -342,6 +342,15 @@ label {
   grid-template-columns: 360px minmax(0, 1fr);
 }
 
+.closing-layout {
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.closing-layout > .panel {
+  width: 100%;
+}
+
 .dashboard-layout {
   align-items: start;
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);

@@ -92,6 +92,7 @@ type SigningEntity = {
 type Bill = {
   id: string;
   billNo: string;
+  projectName?: string | null;
   periodMonth: string;
   status: string;
   totalAmount: string;
@@ -105,7 +106,12 @@ type Bill = {
   invoiceAttachmentIds?: string[];
   receiptAttachmentIds?: string[];
   customer?: Customer;
-  contract?: Pick<Contract, "id" | "code" | "name" | "signingEntity">;
+  signingEntity?: SigningEntity | null;
+  signingEntityId?: string | null;
+  contract?: Pick<
+    Contract,
+    "id" | "code" | "name" | "signingEntity" | "signingEntityId"
+  >;
   items?: Array<{
     id?: string;
     name: string;
@@ -800,8 +806,22 @@ function nextReceivableStatus(status: string) {
 
 function billSigningEntityName(bill: Bill) {
   return (
+    bill.signingEntity?.shortName ??
+    bill.signingEntity?.fullName ??
     bill.contract?.signingEntity?.shortName ??
     bill.contract?.signingEntity?.fullName ??
+    "-"
+  );
+}
+
+function billProjectName(bill: Bill) {
+  return (
+    bill.projectName?.trim() ||
+    bill.items?.map((item) => item.name.trim()).find(Boolean) ||
+    bill.settlements
+      ?.flatMap((settlement) => settlement.items)
+      .map((item) => item.projectName.trim())
+      .find(Boolean) ||
     "-"
   );
 }
@@ -1126,6 +1146,9 @@ export default function Home() {
   const [payableTab, setPayableTab] = useState<"bills" | "paid" | "recipients">(
     "bills",
   );
+  const [receivableProjectName, setReceivableProjectName] = useState("");
+  const [receivableSigningEntityId, setReceivableSigningEntityId] =
+    useState("");
   const [receivableAmount, setReceivableAmount] = useState("0.00");
   const [billStatusDialogOpen, setBillStatusDialogOpen] = useState(false);
   const [billStatusTarget, setBillStatusTarget] = useState("");
@@ -2663,6 +2686,13 @@ export default function Home() {
       preferredCustomerId;
     setSelectedCustomerId(nextCustomerId);
     setSelectedContractId(nextContract?.id ?? "");
+    setReceivableProjectName(nextContract?.name ?? "");
+    setReceivableSigningEntityId(
+      nextContract?.signingEntityId ??
+        nextContract?.signingEntity?.id ??
+        signingEntities[0]?.id ??
+        "",
+    );
     setReceivableAmount("0.00");
     setBillStatusFiles([]);
   }
@@ -2681,6 +2711,10 @@ export default function Home() {
       setMessage("新增账单应收失败：请先创建合同。");
       return;
     }
+    if (signingEntities.length === 0) {
+      setMessage("新增账单应收失败：请先创建签约主体。");
+      return;
+    }
 
     resetReceivableForm();
     setBillDialogOpen(true);
@@ -2697,6 +2731,14 @@ export default function Home() {
       setMessage("新增账单应收失败：请选择合同。");
       return;
     }
+    if (!receivableProjectName.trim()) {
+      setMessage("新增账单应收失败：请填写项目名称。");
+      return;
+    }
+    if (!receivableSigningEntityId) {
+      setMessage("新增账单应收失败：请选择我方主体。");
+      return;
+    }
     if (
       !Number.isFinite(Number(receivableAmount)) ||
       Number(receivableAmount) <= 0
@@ -2710,13 +2752,16 @@ export default function Home() {
         body: JSON.stringify({
           customerId: selectedCustomerId,
           contractId: contract.id,
+          signingEntityId: receivableSigningEntityId,
           periodMonth,
+          projectName: receivableProjectName.trim(),
           billKind: "RECEIVABLE",
           totalAmount: receivableAmount,
         }),
       });
       setSelectedBillId(result.id);
       setBillDialogOpen(false);
+      setReceivableProjectName("");
       setReceivableAmount("0.00");
       return result;
     });
@@ -3617,12 +3662,13 @@ export default function Home() {
             openCreateReceivableDialog={openCreateReceivableDialog}
             periodMonth={periodMonth}
             receivableAmount={receivableAmount}
+            receivableProjectName={receivableProjectName}
+            receivableSigningEntityId={receivableSigningEntityId}
             receivableTab={receivableTab}
             receiptAccount={receiptAccount}
             saveBillStatus={saveBillStatus}
             selectedBill={selectedBill}
             selectedBillId={selectedBillId}
-            selectedContract={selectedContract}
             selectedContractId={selectedContractId}
             selectedCustomerId={selectedCustomerId}
             setBillStatusFiles={(fileList) =>
@@ -3632,10 +3678,13 @@ export default function Home() {
             setReceiptAccount={setReceiptAccount}
             setPeriodMonth={updatePeriodMonth}
             setReceivableAmount={setReceivableAmount}
+            setReceivableProjectName={setReceivableProjectName}
+            setReceivableSigningEntityId={setReceivableSigningEntityId}
             setReceivableTab={setReceivableTab}
             setSelectedBillId={setSelectedBillId}
             setSelectedContractId={setSelectedContractId}
             setSelectedCustomerId={setSelectedCustomerId}
+            signingEntities={signingEntities}
             statusDisabledReason={
               billStatusTarget === "PENDING_SETTLEMENT"
                 ? actionBlockReason("bill.approve")
@@ -6088,7 +6137,7 @@ function ClosingModule({
   profits: ProfitRow[];
 }) {
   return (
-    <section className="workspace two-column">
+    <section className="workspace closing-layout">
       <div className="panel">
         <div className="panel-header">
           <h2>自动结账</h2>
@@ -6128,23 +6177,27 @@ function ReceivableBillingModule({
   openCreateReceivableDialog,
   periodMonth,
   receivableAmount,
+  receivableProjectName,
+  receivableSigningEntityId,
   receivableTab,
   receiptAccount,
   saveBillStatus,
   selectedBill,
   selectedBillId,
-  selectedContract,
   selectedContractId,
   selectedCustomerId,
   setBillStatusFiles,
   setBillStatusTarget,
   setPeriodMonth,
   setReceivableAmount,
+  setReceivableProjectName,
+  setReceivableSigningEntityId,
   setReceiptAccount,
   setReceivableTab,
   setSelectedBillId,
   setSelectedContractId,
   setSelectedCustomerId,
+  signingEntities,
   statusDisabledReason,
 }: {
   attachmentPreview: AttachmentPreview | null;
@@ -6168,23 +6221,27 @@ function ReceivableBillingModule({
   openCreateReceivableDialog: () => void;
   periodMonth: string;
   receivableAmount: string;
+  receivableProjectName: string;
+  receivableSigningEntityId: string;
   receivableTab: "open" | "received";
   receiptAccount: string;
   saveBillStatus: (event: FormEvent<HTMLFormElement>) => void;
   selectedBill?: Bill;
   selectedBillId: string;
-  selectedContract?: Contract;
   selectedContractId: string;
   selectedCustomerId: string;
   setBillStatusFiles: (fileList: FileList | null) => void;
   setBillStatusTarget: (value: string) => void;
   setPeriodMonth: (value: string) => void;
   setReceivableAmount: (value: string) => void;
+  setReceivableProjectName: (value: string) => void;
+  setReceivableSigningEntityId: (value: string) => void;
   setReceiptAccount: (value: string) => void;
   setReceivableTab: (value: "open" | "received") => void;
   setSelectedBillId: (value: string) => void;
   setSelectedContractId: (value: string) => void;
   setSelectedCustomerId: (value: string) => void;
+  signingEntities: SigningEntity[];
   statusDisabledReason: string;
 }) {
   const customerContracts = contracts.filter(
@@ -6205,6 +6262,38 @@ function ReceivableBillingModule({
     : "";
   const billStatusAttachmentRequired =
     billStatusTarget !== "PENDING_SETTLEMENT";
+  function selectReceivableContract(contractId: string) {
+    const nextContract = contracts.find(
+      (contract) => contract.id === contractId,
+    );
+    const currentContract = contracts.find(
+      (contract) => contract.id === selectedContractId,
+    );
+    const shouldRefreshProjectName =
+      !receivableProjectName.trim() ||
+      receivableProjectName.trim() === currentContract?.name.trim();
+    setSelectedContractId(contractId);
+    if (nextContract?.signingEntityId || nextContract?.signingEntity?.id) {
+      setReceivableSigningEntityId(
+        nextContract.signingEntityId ?? nextContract.signingEntity?.id ?? "",
+      );
+    } else {
+      setReceivableSigningEntityId(signingEntities[0]?.id ?? "");
+    }
+    if (shouldRefreshProjectName && nextContract?.name) {
+      setReceivableProjectName(nextContract.name);
+    }
+  }
+
+  function selectReceivableCustomer(customerId: string) {
+    const nextContract = contracts.find(
+      (contract) =>
+        contract.customerId === customerId ||
+        contract.customer?.id === customerId,
+    );
+    setSelectedCustomerId(customerId);
+    selectReceivableContract(nextContract?.id ?? "");
+  }
 
   return (
     <section className="workspace billing-layout">
@@ -6277,16 +6366,9 @@ function ReceivableBillingModule({
                 <label>
                   客户
                   <select
-                    onChange={(event) => {
-                      const customerId = event.target.value;
-                      const nextContract = contracts.find(
-                        (contract) =>
-                          contract.customerId === customerId ||
-                          contract.customer?.id === customerId,
-                      );
-                      setSelectedCustomerId(customerId);
-                      setSelectedContractId(nextContract?.id ?? "");
-                    }}
+                    onChange={(event) =>
+                      selectReceivableCustomer(event.target.value)
+                    }
                     value={selectedCustomerId}
                   >
                     <option value="">选择客户</option>
@@ -6301,7 +6383,7 @@ function ReceivableBillingModule({
                   合同
                   <select
                     onChange={(event) =>
-                      setSelectedContractId(event.target.value)
+                      selectReceivableContract(event.target.value)
                     }
                     value={selectedContractId}
                   >
@@ -6309,6 +6391,32 @@ function ReceivableBillingModule({
                     {customerContracts.map((contract) => (
                       <option key={contract.id} value={contract.id}>
                         {contract.code} · {contractPeriod(contract)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  项目名称
+                  <input
+                    onChange={(event) =>
+                      setReceivableProjectName(event.target.value)
+                    }
+                    placeholder="输入项目名称"
+                    value={receivableProjectName}
+                  />
+                </label>
+                <label>
+                  我方主体
+                  <select
+                    onChange={(event) =>
+                      setReceivableSigningEntityId(event.target.value)
+                    }
+                    value={receivableSigningEntityId}
+                  >
+                    <option value="">选择我方主体</option>
+                    {signingEntities.map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {entity.shortName} · {entity.fullName}
                       </option>
                     ))}
                   </select>
@@ -6332,14 +6440,6 @@ function ReceivableBillingModule({
                     value={receivableAmount}
                   />
                 </label>
-                <div className="definition-list compact">
-                  <div>
-                    <span>我方主体</span>
-                    <strong>
-                      {selectedContract?.signingEntity?.shortName ?? "-"}
-                    </strong>
-                  </div>
-                </div>
               </div>
 
               <div className="modal-actions">
@@ -7424,6 +7524,7 @@ function BillsTable({
       <thead>
         <tr>
           <th>账单号</th>
+          <th>项目名称</th>
           <th>客户</th>
           <th>我方主体</th>
           <th>月份</th>
@@ -7440,6 +7541,7 @@ function BillsTable({
             onClick={() => onSelect(bill.id)}
           >
             <td>{bill.billNo}</td>
+            <td>{billProjectName(bill)}</td>
             <td>{bill.customer?.name ?? "-"}</td>
             <td>{billSigningEntityName(bill)}</td>
             <td>{bill.periodMonth}</td>
