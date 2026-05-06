@@ -901,10 +901,12 @@ function dateTimeText(value: string | undefined | null) {
 
 function isPreviewableAttachment(attachment: Attachment) {
   const contentType = attachment.contentType ?? "";
+  const fileName = attachment.fileName.toLowerCase();
   return (
     contentType.includes("pdf") ||
     contentType.startsWith("image/") ||
-    /\.(pdf|png|jpe?g)$/i.test(attachment.fileName)
+    contentType.startsWith("text/") ||
+    /\.(pdf|png|jpe?g|webp|txt|csv)$/i.test(fileName)
   );
 }
 
