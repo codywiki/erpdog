@@ -6001,7 +6001,7 @@ function ContractsModule({
           role="dialog"
         >
           <div
-            className="modal-panel wide"
+            className="modal-panel wide attachment-modal"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="panel-header">
@@ -6561,7 +6561,7 @@ function ReceivableBillingModule({
           role="dialog"
         >
           <div
-            className="modal-panel wide"
+            className="modal-panel wide attachment-modal"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="panel-header">
@@ -7346,7 +7346,7 @@ function CostPayableModule({
           role="dialog"
         >
           <div
-            className="modal-panel wide"
+            className="modal-panel wide attachment-modal"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="panel-header">
@@ -7428,7 +7428,7 @@ function CostPayableModule({
           role="dialog"
         >
           <div
-            className="modal-panel wide"
+            className="modal-panel wide attachment-modal"
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="panel-header">
