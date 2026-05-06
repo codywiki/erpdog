@@ -1575,10 +1575,20 @@ export class FinanceService {
   ) {
     const body = bodyObject(rawBody);
     const reason = stringField(body, "reason");
+    parsePeriodMonth(periodMonth);
+    const currentPeriod = await this.prisma.billingPeriod.findUnique({
+      where: { orgId_periodMonth: { orgId: user.orgId, periodMonth } },
+      select: { status: true },
+    });
+    if (currentPeriod?.status !== PeriodClosingStatus.CLOSED) {
+      throw new ConflictException("Period is already open.");
+    }
+
     const period = await this.prisma.billingPeriod.upsert({
       where: { orgId_periodMonth: { orgId: user.orgId, periodMonth } },
       update: {
         status: PeriodClosingStatus.REOPENED,
+        closedAt: null,
         reopenedAt: new Date(),
         reason,
       },

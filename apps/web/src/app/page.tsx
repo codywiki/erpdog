@@ -361,6 +361,7 @@ const permissionLabels: Record<string, string> = {
   "payment_request.approve": "审批付款申请",
   "payment.pay": "登记付款",
   "period.close": "确认结账",
+  "period.reopen": "打开账期",
   "report.view": "查看报表",
   "audit.view": "查看审计",
 };
@@ -550,6 +551,9 @@ function translateErrorMessage(message: string) {
   ) {
     return "只有租户管理员和总负责人角色可以拥有用户管理权限。";
   }
+  if (/Only tenant admins and owners can reopen periods/i.test(message)) {
+    return "只有租户管理员和总负责人角色可以打开账期。";
+  }
   if (/Invalid email or password/i.test(message)) {
     return "账号或密码不正确。";
   }
@@ -671,6 +675,9 @@ function translateErrorMessage(message: string) {
   }
   if (/Period is already closed|Period .* is closed/i.test(message)) {
     return "当前账期已关闭。";
+  }
+  if (/Period is already open/i.test(message)) {
+    return "当前账期已经是开启状态。";
   }
 
   return message;
@@ -1830,7 +1837,7 @@ export default function Home() {
         emptyPage<AuditLog>(),
       ),
       fetchIf<BillingPeriod | null>(
-        can("period.close", "report.view"),
+        can("period.close", "period.reopen", "report.view"),
         `/periods/${periodMonth}`,
         null,
       ),
@@ -3399,6 +3406,17 @@ export default function Home() {
     );
   }
 
+  function reopenPeriod() {
+    void submitAction("打开账期", ["period.reopen"], () =>
+      request(`/periods/${periodMonth}/reopen`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: "手动打开已关闭账期，允许继续新增和调整应收账单及成本应付。",
+        }),
+      }),
+    );
+  }
+
   async function loadPayableAttachments(payable: Payable) {
     try {
       const page = await request<PaginatedResponse<Attachment>>(
@@ -4021,9 +4039,11 @@ export default function Home() {
           <ClosingModule
             disabledReason={actionBlockReason("period.close")}
             onConfirmClose={confirmPeriodClose}
+            onReopenPeriod={reopenPeriod}
             periodMonth={periodMonth}
             profits={profits}
             readiness={closingReadiness}
+            reopenDisabledReason={actionBlockReason("period.reopen")}
           />
         ) : null}
       </main>
@@ -5215,9 +5235,12 @@ function IdentityModule({
     (isAdmin && tenantAdminDelegatedRoleCodes.includes(role.code)) ||
     (isOwner && ownerDelegatedRoleCodes.includes(role.code));
   const canGrantPermissionToRole = (role: Role, permissionCode: string) =>
-    permissionCode !== "user.manage" ||
-    role.code === "admin" ||
-    role.code === "owner";
+    (permissionCode !== "user.manage" ||
+      role.code === "admin" ||
+      role.code === "owner") &&
+    (permissionCode !== "period.reopen" ||
+      role.code === "admin" ||
+      role.code === "owner");
   const canEditUser = (item: ConsoleUser) =>
     item.id === currentUserId ||
     (isAdmin &&
@@ -6394,15 +6417,19 @@ function ContractsModule({
 function ClosingModule({
   disabledReason,
   onConfirmClose,
+  onReopenPeriod,
   periodMonth,
   profits,
   readiness,
+  reopenDisabledReason,
 }: {
   disabledReason: string;
   onConfirmClose: () => void;
+  onReopenPeriod: () => void;
   periodMonth: string;
   profits: ProfitRow[];
   readiness: ReturnType<typeof periodClosingReadiness>;
+  reopenDisabledReason: string;
 }) {
   return (
     <section className="workspace closing-layout">
@@ -6439,6 +6466,16 @@ function ClosingModule({
               type="button"
             >
               确认结账并刷新利润
+            </button>
+          ) : null}
+          {readiness.isClosed ? (
+            <button
+              disabled={Boolean(reopenDisabledReason)}
+              onClick={onReopenPeriod}
+              title={reopenDisabledReason || undefined}
+              type="button"
+            >
+              打开账期
             </button>
           ) : null}
         </div>

@@ -80,6 +80,7 @@ const ownerGrantablePermissionCodes: Set<string> = new Set([
   PERMISSION_CODES.PAYMENT_REQUEST_APPROVE,
   PERMISSION_CODES.PAYMENT_PAY,
   PERMISSION_CODES.PERIOD_CLOSE,
+  PERMISSION_CODES.PERIOD_REOPEN,
   PERMISSION_CODES.REPORT_VIEW,
 ]);
 
@@ -512,6 +513,15 @@ export class IdentityService {
     ) {
       throw new ForbiddenException(
         "Only tenant owners can receive user management permission.",
+      );
+    }
+    if (
+      permissionCodes.includes(PERMISSION_CODES.PERIOD_REOPEN) &&
+      roleCode !== ROLE_CODES.ADMIN &&
+      roleCode !== ROLE_CODES.OWNER
+    ) {
+      throw new ForbiddenException(
+        "Only tenant admins and owners can reopen periods.",
       );
     }
 

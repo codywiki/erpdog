@@ -366,6 +366,16 @@ export class FinanceController {
     return this.finance.closePeriod(user, periodMonth, body);
   }
 
+  @Post("periods/:periodMonth/reopen")
+  @RequirePermissions(PERMISSION_CODES.PERIOD_REOPEN)
+  reopenPeriod(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("periodMonth") periodMonth: string,
+    @Body() body: Payload,
+  ) {
+    return this.finance.reopenPeriod(user, periodMonth, body);
+  }
+
   @Get("attachments")
   @RequirePermissions(
     PERMISSION_CODES.CUSTOMER_READ_ALL,
