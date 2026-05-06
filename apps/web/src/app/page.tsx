@@ -744,6 +744,13 @@ const paymentRecipientPlatformText: Record<PaymentRecipientPlatform, string> = {
 const ownerDelegatedRoleCodes = ["business_owner", "finance"];
 const tenantAdminDelegatedRoleCodes = ["owner", "business_owner", "finance"];
 const platformModuleIds: ModuleId[] = ["superAdmins", "tenants"];
+const roleCodeText: Record<string, string> = {
+  super_admin: "超级管理员",
+  admin: "租户管理员",
+  owner: "总负责人",
+  business_owner: "业务负责人",
+  finance: "财务",
+};
 const tenantManagementRoleOptions = [
   { code: "admin", name: "租户管理员" },
   { code: "owner", name: "总负责人" },
@@ -792,6 +799,30 @@ function emptyConsoleData(): ConsoleData {
     auditLogs: [],
     profits: [],
   };
+}
+
+function userDisplayName(user: ApiUser | null) {
+  return user?.name?.trim() || userAccountLabel(user) || "未登录";
+}
+
+function userAccountLabel(user: ApiUser | null) {
+  return user?.phone?.trim() || user?.email?.trim() || "";
+}
+
+function userRoleLabel(user: ApiUser | null) {
+  const roles = user?.roles ?? [];
+  return (
+    roles
+      .map((role) => roleCodeText[role] ?? role)
+      .filter(Boolean)
+      .join("、") || "未配置角色"
+  );
+}
+
+function currentUserChipLabel(user: ApiUser | null) {
+  const name = userDisplayName(user);
+  const account = userAccountLabel(user);
+  return account && account !== name ? `${name} · ${account}` : name;
 }
 
 function dateText(value: string | undefined | null) {
@@ -1470,13 +1501,12 @@ export default function Home() {
     setToken(cachedSession.accessToken);
     setUser(cachedSession.user);
     setMessage(`正在恢复登录态：${cachedSession.user.name}`);
-    void refresh(cachedSession.accessToken, cachedSession.user).catch(
-      (error: unknown) =>
-        setMessage(
-          error instanceof Error
-            ? translateErrorMessage(error.message)
-            : authExpiredMessage,
-        ),
+    void refresh(cachedSession.accessToken).catch((error: unknown) =>
+      setMessage(
+        error instanceof Error
+          ? translateErrorMessage(error.message)
+          : authExpiredMessage,
+      ),
     );
   }, []);
 
@@ -1538,31 +1568,13 @@ export default function Home() {
     return (await response.json()) as T;
   }
 
-  async function refresh(nextToken = token, nextUser = user) {
+  async function refresh(nextToken = token) {
     if (!nextToken) {
       setMessage(loginRequiredMessage);
       return;
     }
 
     const authHeader = { Authorization: `Bearer ${nextToken}` };
-    const nextUserRoleCodes = nextUser?.roles ?? [];
-    const nextIsSuperAdmin = nextUserRoleCodes.includes("super_admin");
-    const nextHasTenantIdentityAccess =
-      nextUserRoleCodes.includes("admin") ||
-      nextUserRoleCodes.includes("owner");
-    const can = (...permissions: string[]) => {
-      if (permissions.includes("tenant.manage")) {
-        return nextIsSuperAdmin;
-      }
-      if (permissions.includes("user.manage")) {
-        return nextHasTenantIdentityAccess;
-      }
-      return (
-        nextUser?.permissions.some((permission) =>
-          permissions.includes(permission),
-        ) ?? false
-      );
-    };
     const fetchJson = async <TValue,>(path: string): Promise<TValue> => {
       const response = await fetch(`${apiBase}${path}`, {
         headers: authHeader,
@@ -1578,6 +1590,26 @@ export default function Home() {
       }
 
       return (await response.json()) as TValue;
+    };
+    const currentUser = await fetchJson<ApiUser>("/auth/me");
+    setUser(currentUser);
+    writeAuthSessionCookie({ accessToken: nextToken, user: currentUser });
+
+    const nextUserRoleCodes = currentUser.roles ?? [];
+    const nextIsSuperAdmin = nextUserRoleCodes.includes("super_admin");
+    const nextHasTenantIdentityAccess =
+      nextUserRoleCodes.includes("admin") ||
+      nextUserRoleCodes.includes("owner");
+    const can = (...permissions: string[]) => {
+      if (permissions.includes("tenant.manage")) {
+        return nextIsSuperAdmin;
+      }
+      if (permissions.includes("user.manage")) {
+        return nextHasTenantIdentityAccess;
+      }
+      return currentUser.permissions.some((permission) =>
+        permissions.includes(permission),
+      );
     };
     const fetchIf = async <TValue,>(
       allowed: boolean,
@@ -1747,7 +1779,7 @@ export default function Home() {
       setLoginDialogOpen(false);
       setMessage(`已登录：${result.user.name}`);
       try {
-        await refresh(result.accessToken, result.user);
+        await refresh(result.accessToken);
       } catch (refreshError) {
         setMessage(
           refreshError instanceof Error
@@ -3361,13 +3393,11 @@ export default function Home() {
           })}
         </nav>
         <div className="session">
-          <span>{user?.name ?? "未登录"}</span>
+          <span>{userDisplayName(user)}</span>
           <small>
-            {isSuperAdmin
-              ? "平台超级管理员"
-              : isLoggedIn
-                ? "正式系统已登录"
-                : "请先登录正式系统"}
+            {isLoggedIn
+              ? `${userRoleLabel(user)} · ${userAccountLabel(user)}`
+              : "请先登录正式系统"}
           </small>
         </div>
       </aside>
@@ -3418,7 +3448,12 @@ export default function Home() {
             <div className="auth-actions">
               {isLoggedIn ? (
                 <>
-                  <span className="auth-chip">{user?.name}</span>
+                  <span
+                    className="auth-chip"
+                    title={currentUserChipLabel(user)}
+                  >
+                    {currentUserChipLabel(user)}
+                  </span>
                   <button onClick={logout} type="button">
                     退出
                   </button>
